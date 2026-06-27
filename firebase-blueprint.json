@@ -1,0 +1,78 @@
+{
+  "entities": {
+    "OrderItem": {
+      "title": "OrderItem",
+      "description": "An item inside an invoice",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "qty": { "type": "number" },
+        "price": { "type": "number" }
+      },
+      "required": ["id", "name", "qty", "price"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "An invoice representing a sales order and its fulfillment lifecycle",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "clientAddress": { "type": "string" },
+        "items": { "type": "array", "description": "List of order items" },
+        "status": { "type": "string", "enum": ["En préparation", "En livraison", "Livré", "Payé", "Annulé"] },
+        "livreur": { "type": "string" },
+        "deliveryNote": { "type": "string" },
+        "totalEncaisse": { "type": "number" },
+        "discount": { "type": "number" },
+        "treatedBy": { "type": "string", "enum": ["Employé", "Employeur"] },
+        "treatedByName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "invoiceNumber", "clientName", "clientPhone", "clientAddress", "items", "status", "treatedBy", "createdAt"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "An employee or staff member",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string", "enum": ["Actif", "Inactif"] },
+        "password": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "phone", "role", "status", "createdAt"]
+    },
+    "NoteItem": {
+      "title": "NoteItem",
+      "description": "A notebook entry/memo stored in the settings pane",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/invoices/{invoiceId}": {
+      "schema": "Invoice",
+      "description": "The collection of invoices in the app"
+    },
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "The collection of registered employees/staff"
+    },
+    "/notes/{noteId}": {
+      "schema": "NoteItem",
+      "description": "The collection of notes in settings"
+    }
+  }
+}

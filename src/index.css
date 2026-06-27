@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-blue: #171b34;
+  --color-brand-blue-light: #24294d;
+  --color-brand-yellow: #f8ef1d;
+  --color-brand-yellow-hover: #ebd415;
+}
+
+/* Force light mode regardless of prefers-color-scheme. 
+   We define the dark variant selector to target a class that never exists,
+   so all dark: classes in the tailwind code are cleanly ignored. */
+@variant dark (.never-match-this-class);
+
+body {
+  background-color: #f8fafc; /* Gentle slate-50 light background */
+  color: #0f172a; /* slate-900 text */
+}

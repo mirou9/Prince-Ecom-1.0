@@ -1,0 +1,6 @@
+{
+  "name": "Prince Ecom",
+  "description": "Application de suivi des commandes pour Prince Ecom avec devise DZD (Dinar Algérien) et gestion des rôles.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
