@@ -31,15 +31,16 @@ import {
   Lock,
   Eye,
   EyeOff,
+  Tag,
   X
 } from 'lucide-react';
 
 import { Invoice, OrderStatus, UserRole, Employee } from './types';
-import { INITIAL_INVOICES } from './data';
 import { fuzzySearchInvoices, formatDZD } from './utils';
 
 import InvoiceCard from './components/InvoiceCard';
 import CreateInvoiceModal from './components/CreateInvoiceModal';
+import EditInvoiceModal from './components/EditInvoiceModal';
 import LivraisonModal from './components/LivraisonModal';
 import VendreModal from './components/VendreModal';
 import CreateEmployeeModal from './components/CreateEmployeeModal';
@@ -51,6 +52,9 @@ import {
   saveEmployeesToFirestoreBatch,
   syncNotes,
   saveNotesToFirestoreBatch,
+  syncLivreurs,
+  saveLivreurToFirestore,
+  clearAllFirestoreData,
   NoteItem
 } from './lib/firebase';
 
@@ -66,7 +70,7 @@ interface SettingsPaneProps {
   setActiveSettingsTab: (tab: 'Employé' | 'Statistique') => void;
   setShowSettings: (show: boolean) => void;
   formatDZD: (val: number) => string;
-  onClearAllData: () => void;
+  onClearAllData: () => Promise<void> | void;
   saveEmployees: (newEmployees: Employee[]) => void;
 }
 
@@ -188,9 +192,9 @@ function SettingsPane({
                 <button
                   type="button"
                   id="btn-clear-all-data-confirm"
-                  onClick={() => {
+                  onClick={async () => {
                     if (password === 'PrinceEcom') {
-                      onClearAllData();
+                      await onClearAllData();
                       setNotes([]); // clears state notes
                       setShowPasswordInput(false);
                       setPassword('');
@@ -473,113 +477,178 @@ function SettingsPane({
             </div>
 
             {/* Visual statistics dashboard grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {/* Revenue Card */}
-              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
-                <div className="flex justify-between items-center text-zinc-400">
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Chiffre d’Affaires</span>
-                  <DollarSign className="w-4 h-4 text-emerald-555" />
-                </div>
-                <p className="text-lg font-black font-mono text-emerald-600 dark:text-emerald-450">
-                  {formatDZD(filteredInvoicesForStats.reduce((acc, curr) => {
-                    if (curr.status !== 'Payé') return acc;
-                    const itemsTotal = curr.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
-                    const total = Math.max(0, itemsTotal - (curr.discount || 0));
-                    return acc + (curr.totalEncaisse ?? total);
-                  }, 0))}
-                </p>
-                <p className="text-[10px] text-zinc-400">Total payé réel (DA)</p>
-              </div>
+            {(() => {
+              const totalVentes = filteredInvoicesForStats.reduce((acc, curr) => {
+                if (curr.status !== 'Payé') return acc;
+                const itemsTotal = curr.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+                const total = Math.max(0, itemsTotal - (curr.discount || 0));
+                return acc + (curr.totalEncaisse ?? total);
+              }, 0);
 
-              {/* Volume orders */}
-              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
-                <div className="flex justify-between items-center text-zinc-400">
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Total Factures</span>
-                  <Users className="w-4 h-4 text-[#171b34] dark:text-[#f8ef1d]" />
-                </div>
-                <p className="text-lg font-black text-zinc-800 dark:text-zinc-200 font-mono">
-                  {filteredInvoicesForStats.length} PE
-                </p>
-                <p className="text-[10px] text-zinc-400">Commandes filtrées</p>
-              </div>
+              const totalAchats = filteredInvoicesForStats.reduce((acc, curr) => {
+                if (curr.status !== 'Payé') return acc;
+                return acc + (curr.prixAchat ?? 0);
+              }, 0);
 
-              {/* Average order price */}
-              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
-                <div className="flex justify-between items-center text-zinc-400">
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Panier Moyen</span>
-                  <TrendingUp className="w-4 h-4 text-[#f8ef1d]" />
-                </div>
-                <p className="text-lg font-black text-zinc-800 dark:text-zinc-200 font-mono">
-                  {formatDZD(filteredInvoicesForStats.length > 0 ? (filteredInvoicesForStats.reduce((acc, curr) => {
-                    const itemsTotal = curr.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
-                    return acc + Math.max(0, itemsTotal - (curr.discount || 0));
-                  }, 0) / filteredInvoicesForStats.length) : 0)}
-                </p>
-                <p className="text-[10px] text-zinc-400">Panier moyen brut</p>
-              </div>
+              const totalBenefice = totalVentes - totalAchats;
 
-              {/* Status checklist metrics */}
-              <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
-                <div className="flex justify-between items-center text-zinc-400">
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Taux d'encaissement</span>
-                  <CheckCircle className="w-4 h-4 text-emerald-500" />
-                </div>
-                <p className="text-lg font-black font-mono text-emerald-600 dark:text-emerald-450">
-                  {filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length} réglées
-                </p>
-                <p className="text-[10px] text-zinc-450">
-                  {filteredInvoicesForStats.length > 0 ? Math.round((filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length / filteredInvoicesForStats.length) * 100) : 0}% des ventes closes
-                </p>
-              </div>
-            </div>
+              const empFactures = filteredInvoicesForStats.filter(i => i.treatedBy === 'Employé');
+              const empVolume = empFactures.reduce((acc, curr) => {
+                const itemsTotal = curr.items.reduce((s, item) => s + (item.price * item.qty), 0);
+                return acc + Math.max(0, itemsTotal - (curr.discount || 0));
+              }, 0);
+              const empBenefice = empFactures.reduce((acc, curr) => {
+                if (curr.status !== 'Payé') return acc;
+                const itemsTotal = curr.items.reduce((s, it) => s + (it.price * it.qty), 0);
+                const total = Math.max(0, itemsTotal - (curr.discount || 0));
+                const vente = curr.totalEncaisse ?? total;
+                const achat = curr.prixAchat ?? 0;
+                return acc + (vente - achat);
+              }, 0);
 
-            {/* Additional detailed metrics */}
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-2xs space-y-3">
-              <h4 className="text-xs font-black uppercase tracking-wider text-zinc-500 pb-2 border-b border-zinc-100 dark:border-zinc-850">
-                Contribution et répartition par membre traitant
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* Treated by Employé */}
-                <div className="p-3.5 bg-zinc-50 dark:bg-zinc-950/30 rounded-lg border border-zinc-100 dark:border-zinc-800 space-y-2">
-                  <p className="text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest">
-                    🤵 Actions de l'Employé
-                  </p>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-zinc-500">Factures prises en charge:</span>
-                    <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{filteredInvoicesForStats.filter(i => i.treatedBy === 'Employé').length}</span>
+              const patronFactures = filteredInvoicesForStats.filter(i => i.treatedBy === 'Employeur');
+              const patronVolume = patronFactures.reduce((acc, curr) => {
+                const itemsTotal = curr.items.reduce((s, item) => s + (item.price * item.qty), 0);
+                return acc + Math.max(0, itemsTotal - (curr.discount || 0));
+              }, 0);
+              const patronBenefice = patronFactures.reduce((acc, curr) => {
+                if (curr.status !== 'Payé') return acc;
+                const itemsTotal = curr.items.reduce((s, it) => s + (it.price * it.qty), 0);
+                const total = Math.max(0, itemsTotal - (curr.discount || 0));
+                const vente = curr.totalEncaisse ?? total;
+                const achat = curr.prixAchat ?? 0;
+                return acc + (vente - achat);
+              }, 0);
+
+              return (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    {/* 1. BENEFICE / GAIN TOTAL CARD */}
+                    <div className="bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-transparent dark:from-emerald-950/40 dark:via-zinc-900 dark:to-zinc-900 rounded-xl border-2 border-emerald-500/40 p-4 shadow-sm space-y-1 relative overflow-hidden">
+                      <div className="flex justify-between items-center text-emerald-600 dark:text-emerald-400">
+                        <span className="text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                          <TrendingUp className="w-3.5 h-3.5" />
+                          <span>Bénéfices / Gain Total</span>
+                        </span>
+                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                          Net
+                        </span>
+                      </div>
+                      <p className={`text-xl font-black font-mono ${totalBenefice >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'}`}>
+                        {formatDZD(totalBenefice)}
+                      </p>
+                      <p className="text-[9.5px] text-zinc-500 dark:text-zinc-400">
+                        Gain net (Ventes - Achats)
+                      </p>
+                    </div>
+
+                    {/* 2. Revenue Card */}
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Chiffre d’Affaires</span>
+                        <DollarSign className="w-4 h-4 text-emerald-555" />
+                      </div>
+                      <p className="text-lg font-black font-mono text-emerald-600 dark:text-emerald-450">
+                        {formatDZD(totalVentes)}
+                      </p>
+                      <p className="text-[10px] text-zinc-400">Total payé réel (DA)</p>
+                    </div>
+
+                    {/* 3. Cost of Purchase Card */}
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Coût d'Achat</span>
+                        <Tag className="w-4 h-4 text-blue-500" />
+                      </div>
+                      <p className="text-lg font-black font-mono text-zinc-800 dark:text-zinc-200">
+                        {formatDZD(totalAchats)}
+                      </p>
+                      <p className="text-[10px] text-zinc-400">Achats factures payées</p>
+                    </div>
+
+                    {/* 4. Volume orders */}
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Total Factures</span>
+                        <Users className="w-4 h-4 text-[#171b34] dark:text-[#f8ef1d]" />
+                      </div>
+                      <p className="text-lg font-black text-zinc-800 dark:text-zinc-200 font-mono">
+                        {filteredInvoicesForStats.length} PE
+                      </p>
+                      <p className="text-[10px] text-zinc-400">Commandes filtrées</p>
+                    </div>
+
+                    {/* 5. Status checklist metrics */}
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Taux d'encaissement</span>
+                        <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      </div>
+                      <p className="text-lg font-black font-mono text-emerald-600 dark:text-emerald-450">
+                        {filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length} réglées
+                      </p>
+                      <p className="text-[10px] text-zinc-450">
+                        {filteredInvoicesForStats.length > 0 ? Math.round((filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length / filteredInvoicesForStats.length) * 100) : 0}% des ventes closes
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
-                    <span className="text-xs text-zinc-500">Volume généré:</span>
-                    <span className="text-xs font-bold font-mono text-emerald-600">
-                      {formatDZD(filteredInvoicesForStats.filter(i => i.treatedBy === 'Employé').reduce((acc, curr) => {
-                        const itemsTotal = curr.items.reduce((s, item) => s + (item.price * item.qty), 0);
-                        return acc + Math.max(0, itemsTotal - (curr.discount || 0));
-                      }, 0))}
-                    </span>
-                  </div>
-                </div>
 
-                {/* Treated by Employeur */}
-                <div className="p-3.5 bg-zinc-50 dark:bg-zinc-950/30 rounded-lg border border-zinc-100 dark:border-zinc-800 space-y-2">
-                  <p className="text-[10px] font-black text-[#171b34] dark:text-[#f8ef1d] uppercase tracking-widest">
-                    👑 Actions de l'Employeur
-                  </p>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-zinc-500">Factures prises en charge:</span>
-                    <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{filteredInvoicesForStats.filter(i => i.treatedBy === 'Employeur').length}</span>
+                  {/* Additional detailed metrics */}
+                  <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-2xs space-y-3">
+                    <h4 className="text-xs font-black uppercase tracking-wider text-zinc-500 pb-2 border-b border-zinc-100 dark:border-zinc-850">
+                      Contribution et répartition par membre traitant
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {/* Treated by Employé */}
+                      <div className="p-3.5 bg-zinc-50 dark:bg-zinc-950/30 rounded-lg border border-zinc-100 dark:border-zinc-800 space-y-2">
+                        <p className="text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest">
+                          🤵 Actions de l'Employé
+                        </p>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-zinc-500">Factures prises en charge:</span>
+                          <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{empFactures.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="text-xs text-zinc-500">Volume généré:</span>
+                          <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">
+                            {formatDZD(empVolume)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="text-xs text-zinc-500 font-semibold">Bénéfice net généré:</span>
+                          <span className="text-xs font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                            +{formatDZD(empBenefice)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Treated by Employeur */}
+                      <div className="p-3.5 bg-zinc-50 dark:bg-zinc-950/30 rounded-lg border border-zinc-100 dark:border-zinc-800 space-y-2">
+                        <p className="text-[10px] font-black text-[#171b34] dark:text-[#f8ef1d] uppercase tracking-widest">
+                          👑 Actions de l'Employeur
+                        </p>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-zinc-500">Factures prises en charge:</span>
+                          <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{patronFactures.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="text-xs text-zinc-500">Volume généré:</span>
+                          <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">
+                            {formatDZD(patronVolume)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="text-xs text-zinc-500 font-semibold">Bénéfice net généré:</span>
+                          <span className="text-xs font-bold font-mono text-emerald-600 dark:text-emerald-400 font-black">
+                            +{formatDZD(patronBenefice)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
-                    <span className="text-xs text-zinc-500">Volume généré:</span>
-                    <span className="text-xs font-bold font-mono text-emerald-600 font-black">
-                      {formatDZD(filteredInvoicesForStats.filter(i => i.treatedBy === 'Employeur').reduce((acc, curr) => {
-                        const itemsTotal = curr.items.reduce((s, item) => s + (item.price * item.qty), 0);
-                        return acc + Math.max(0, itemsTotal - (curr.discount || 0));
-                      }, 0))}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
+                </>
+              );
+            })()}
 
           </div>
         );
@@ -631,9 +700,9 @@ function SettingsPane({
                 return (
                   <div
                     key={note.id}
-                    className="flex justify-between items-start p-2.5 bg-zinc-50 dark:bg-zinc-950/40 rounded-lg border border-zinc-100 dark:border-zinc-800"
+                    className="p-2.5 bg-zinc-50 dark:bg-zinc-950/40 rounded-lg border border-zinc-100 dark:border-zinc-800"
                   >
-                    <div className="space-y-1 pr-4">
+                    <div className="space-y-1">
                       <p className="text-xs text-zinc-800 dark:text-zinc-200 font-medium whitespace-pre-wrap">
                         {note.content}
                       </p>
@@ -641,14 +710,6 @@ function SettingsPane({
                         {formattedDate}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteNote(note.id)}
-                      className="text-zinc-400 hover:text-rose-500 p-1 rounded-md transition cursor-pointer"
-                      title="Supprimer la note"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
                   </div>
                 );
               })}
@@ -901,11 +962,16 @@ export default function App() {
   
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [isLivraisonOpen, setIsLivraisonOpen] = useState(false);
+  const [livraisonTargetInvoice, setLivraisonTargetInvoice] = useState<Invoice | null>(null);
   const [isVendreOpen, setIsVendreOpen] = useState(false);
+  const [vendreTargetInvoice, setVendreTargetInvoice] = useState<Invoice | null>(null);
   
   // Settings and Staff Management States
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [livreurs, setLivreurs] = useState<string[]>([]);
 
   const [isCreateEmployeeOpen, setIsCreateEmployeeOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -931,26 +997,28 @@ export default function App() {
   // Page 4 filter (Historique)
   const [p4TreatedByFilter, setP4TreatedByFilter] = useState<string>('tous');
 
-  // Load / Save invoices and employees via Firebase sync
+  // Load / Save invoices, employees and livreurs via Firebase sync (all start empty)
   useEffect(() => {
     const unsubscribe = syncInvoices((data) => {
       setInvoices(data);
       localStorage.setItem('prince_ecom_invoices', JSON.stringify(data));
-    }, INITIAL_INVOICES);
+    });
     return () => unsubscribe();
   }, []);
 
   useEffect(() => {
-    const fallbackEmployees = [
-      { id: 'emp-1', name: 'Sofiane Zitouni', phone: '0662 44 55 66', role: 'Vendeur', status: 'Actif', password: '123', createdAt: '2026-05-24T10:00:00Z' },
-      { id: 'emp-2', name: 'Amine Belkacem', phone: '0550 12 34 56', role: 'Livreur', status: 'Actif', password: '123', createdAt: '2026-05-23T11:30:00Z' },
-      { id: 'emp-3', name: 'Karim Othmani', phone: '0770 45 67 89', role: 'Préparateur', status: 'Actif', password: '123', createdAt: '2026-05-22T08:15:00Z' }
-    ] as Employee[];
-
     const unsubscribe = syncEmployees((data) => {
       setEmployees(data);
       localStorage.setItem('prince_ecom_employees', JSON.stringify(data));
-    }, fallbackEmployees);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = syncLivreurs((data) => {
+      setLivreurs(data);
+      localStorage.setItem('prince_ecom_livreurs', JSON.stringify(data));
+    });
     return () => unsubscribe();
   }, []);
 
@@ -1016,17 +1084,15 @@ export default function App() {
     saveEmployees(updated);
   };
 
-  // Reset helper
-  const handleResetData = () => {
-    if (window.confirm('Voulez-vous réinitialiser l\'application avec les données de démonstration d\'origine ?')) {
-      saveInvoices(INITIAL_INVOICES);
-    }
-  };
-
-  const handleClearAllData = () => {
-    saveInvoices([]);
-    saveEmployees([]);
+  const handleClearAllData = async () => {
+    setInvoices([]);
+    setEmployees([]);
+    setLivreurs([]);
+    localStorage.removeItem('prince_ecom_invoices');
+    localStorage.removeItem('prince_ecom_employees');
     localStorage.removeItem('prince_ecom_settings_notes');
+    localStorage.removeItem('prince_ecom_livreurs');
+    await clearAllFirestoreData();
   };
 
 
@@ -1055,20 +1121,49 @@ export default function App() {
     saveInvoices(updated);
   };
 
+  // Admin edit invoice handlers
+  const handleOpenEditInvoice = (invoice: Invoice) => {
+    setEditingInvoice(invoice);
+    setIsEditOpen(true);
+  };
+
+  const handleConfirmEditInvoice = (updatedInvoice: Invoice) => {
+    const updated = invoices.map(inv => {
+      if (inv.id === updatedInvoice.id) {
+        return updatedInvoice;
+      }
+      return inv;
+    });
+    saveInvoices(updated);
+  };
+
   // Change individual order status from card dropdown
   const handleStatusChange = (id: string, newStatus: OrderStatus) => {
+    const targetInv = invoices.find(inv => inv.id === id);
+    if (!targetInv) return;
+
+    // 1. In Page 1 (En préparation), when clicking 'En livraison', prompt for mandatory livreur name
+    if (newStatus === 'En livraison' && targetInv.status === 'En préparation') {
+      setLivraisonTargetInvoice(targetInv);
+      setIsLivraisonOpen(true);
+      return;
+    }
+
+    // 2. In ALL pages, when choosing status 'Payé', pop-up opens with prix d'achat and prix de vente
+    if (newStatus === 'Payé') {
+      setVendreTargetInvoice(targetInv);
+      setIsVendreOpen(true);
+      return;
+    }
+
     const updated = invoices.map(inv => {
       if (inv.id === id) {
-        // If status changes to Paye, default totalEncaisse if not yet set
-        const itemsTotal = inv.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
-        const totalAmount = Math.max(0, itemsTotal - (inv.discount || 0));
         return {
           ...inv,
           status: newStatus,
           // Propagate treatedBy to current role of the active user
           treatedBy: currentRole,
-          treatedByName: currentUserName || currentRole,
-          totalEncaisse: newStatus === 'Payé' ? (inv.totalEncaisse ?? totalAmount) : inv.totalEncaisse
+          treatedByName: currentUserName || currentRole
         };
       }
       return inv;
@@ -1077,7 +1172,7 @@ export default function App() {
   };
 
   // Page 2 -> "Livraison" handler
-  const handleLivraisonSubmit = (invoiceId: string, livreur: string, note: string) => {
+  const handleLivraisonSubmit = async (invoiceId: string, livreur: string, note: string) => {
     const updated = invoices.map(inv => {
       if (inv.id === invoiceId) {
         return {
@@ -1092,16 +1187,20 @@ export default function App() {
       return inv;
     });
     saveInvoices(updated);
+    if (livreur.trim()) {
+      await saveLivreurToFirestore(livreur.trim());
+    }
   };
 
-  // Page 2 -> "Vendre" handler
-  const handleVendreSubmit = (invoiceId: string, totalEncaisse: number) => {
+  // Vendre / Paiement handler with prixVente and prixAchat
+  const handleVendreSubmit = (invoiceId: string, prixVente: number, prixAchat: number) => {
     const updated = invoices.map(inv => {
       if (inv.id === invoiceId) {
         return {
           ...inv,
           status: 'Payé' as OrderStatus,
-          totalEncaisse: totalEncaisse,
+          totalEncaisse: prixVente,
+          prixAchat: prixAchat,
           treatedBy: currentRole,
           treatedByName: currentUserName || currentRole
         };
@@ -1453,6 +1552,7 @@ export default function App() {
                     invoice={invoice} 
                     onStatusChange={handleStatusChange}
                     currentRole={currentRole}
+                    onEditInvoice={handleOpenEditInvoice}
                   />
                 ))}
               </div>
@@ -1486,6 +1586,7 @@ export default function App() {
                     invoice={invoice} 
                     onStatusChange={handleStatusChange}
                     currentRole={currentRole}
+                    onEditInvoice={handleOpenEditInvoice}
                   />
                 ))}
               </div>
@@ -1524,6 +1625,7 @@ export default function App() {
                     onStatusChange={handleStatusChange}
                     currentRole={currentRole}
                     isPayPage={true}
+                    onEditInvoice={handleOpenEditInvoice}
                   />
                 ))}
               </div>
@@ -1585,6 +1687,7 @@ export default function App() {
                     onStatusChange={handleStatusChange}
                     currentRole={currentRole}
                     isPayPage={true}
+                    onEditInvoice={handleOpenEditInvoice}
                   />
                 ))}
               </div>
@@ -1625,6 +1728,7 @@ export default function App() {
                 type="button"
                 id="fab-livraison"
                 onClick={() => {
+                  setLivraisonTargetInvoice(null);
                   setIsLivraisonOpen(true);
                   setShowPage2SubMenu(false);
                 }}
@@ -1639,6 +1743,7 @@ export default function App() {
                 type="button"
                 id="fab-vendre"
                 onClick={() => {
+                  setVendreTargetInvoice(null);
                   setIsVendreOpen(true);
                   setShowPage2SubMenu(false);
                 }}
@@ -1797,19 +1902,28 @@ export default function App() {
         currentRole={currentRole}
       />
 
-      {/* 5.2 Expédier livraison dialog (Page 2 FAB sub "+" click -> Livraison) */}
+      {/* 5.2 Expédier livraison dialog */}
       <LivraisonModal
         isOpen={isLivraisonOpen}
-        onClose={() => setIsLivraisonOpen(false)}
+        onClose={() => {
+          setIsLivraisonOpen(false);
+          setLivraisonTargetInvoice(null);
+        }}
         preparationInvoices={visibleInvoices.filter(i => i.status === 'En préparation')}
+        targetInvoice={livraisonTargetInvoice}
         onSubmit={handleLivraisonSubmit}
+        livreurs={livreurs}
       />
 
-      {/* 5.3 Encaisser vente dialog (Page 2 FAB sub "+" click -> Vendre) */}
+      {/* 5.3 Encaisser vente dialog (Pop-up avec Prix d'achat et Prix de vente) */}
       <VendreModal
         isOpen={isVendreOpen}
-        onClose={() => setIsVendreOpen(false)}
-        preparationInvoices={visibleInvoices.filter(i => i.status === 'En préparation')}
+        onClose={() => {
+          setIsVendreOpen(false);
+          setVendreTargetInvoice(null);
+        }}
+        preparationInvoices={visibleInvoices.filter(i => i.status !== 'Payé')}
+        targetInvoice={vendreTargetInvoice}
         onSubmit={handleVendreSubmit}
       />
 
@@ -1818,6 +1932,17 @@ export default function App() {
         isOpen={isCreateEmployeeOpen}
         onClose={() => setIsCreateEmployeeOpen(false)}
         onSubmit={handleCreateEmployeeSubmit}
+      />
+
+      {/* 5.5. Edit Invoice Dialog Popup (Admin Only) */}
+      <EditInvoiceModal
+        isOpen={isEditOpen}
+        onClose={() => {
+          setIsEditOpen(false);
+          setEditingInvoice(null);
+        }}
+        invoice={editingInvoice}
+        onConfirm={handleConfirmEditInvoice}
       />
 
     </div>

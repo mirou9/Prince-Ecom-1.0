@@ -27,8 +27,9 @@ export interface Invoice {
   livreur?: string;
   deliveryNote?: string;
   
-  // Sale details (Page 2: Vendre action)
-  totalEncaisse?: number; // in DZD
+  // Sale details (Page 2: Vendre action / Statut Payé)
+  totalEncaisse?: number; // in DZD (Prix de vente)
+  prixAchat?: number; // in DZD (Prix d'achat)
   
   // Custom discount / remise
   discount?: number; // in DZD

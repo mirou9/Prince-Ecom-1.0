@@ -6,7 +6,6 @@
 import React, { useState } from 'react';
 import { X, Truck, Info } from 'lucide-react';
 import { Invoice } from '../types';
-import { AVAILABLE_LIVREURS } from '../data';
 import { formatDZD } from '../utils';
 
 interface LivraisonModalProps {
@@ -14,27 +13,49 @@ interface LivraisonModalProps {
   onClose: () => void;
   preparationInvoices: Invoice[];
   onSubmit: (invoiceId: string, livreur: string, note: string) => void;
+  livreurs?: string[];
+  targetInvoice?: Invoice | null;
 }
 
-export default function LivraisonModal({ isOpen, onClose, preparationInvoices, onSubmit }: LivraisonModalProps) {
+export default function LivraisonModal({ 
+  isOpen, 
+  onClose, 
+  preparationInvoices, 
+  onSubmit, 
+  livreurs = [],
+  targetInvoice = null
+}: LivraisonModalProps) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('');
   const [livreur, setLivreur] = useState('');
   const [note, setNote] = useState('');
+
+  React.useEffect(() => {
+    if (isOpen) {
+      if (targetInvoice) {
+        setSelectedInvoiceId(targetInvoice.id);
+      } else if (preparationInvoices.length > 0 && !selectedInvoiceId) {
+        setSelectedInvoiceId(preparationInvoices[0].id);
+      }
+      setLivreur('');
+      setNote('');
+    }
+  }, [isOpen, targetInvoice]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedInvoiceId) {
+    const effectiveInvoiceId = targetInvoice ? targetInvoice.id : selectedInvoiceId;
+    if (!effectiveInvoiceId) {
       alert('Veuillez sélectionner une facture.');
       return;
     }
     if (!livreur.trim()) {
-      alert('Veuillez spécifier un livreur.');
+      alert('Veuillez spécifier le nom du livreur (champ obligatoire).');
       return;
     }
 
-    onSubmit(selectedInvoiceId, livreur.trim(), note.trim());
+    onSubmit(effectiveInvoiceId, livreur.trim(), note.trim());
     
     // Reset state
     setSelectedInvoiceId('');
@@ -43,9 +64,9 @@ export default function LivraisonModal({ isOpen, onClose, preparationInvoices, o
     onClose();
   };
 
-  const selectedInvoice = preparationInvoices.find(inv => inv.id === selectedInvoiceId);
-  const totalAmountItems = selectedInvoice ? selectedInvoice.items.reduce((s, it) => s + (it.price * it.qty), 0) : 0;
-  const totalAmount = selectedInvoice ? Math.max(0, totalAmountItems - (selectedInvoice.discount || 0)) : 0;
+  const activeInvoice = targetInvoice || preparationInvoices.find(inv => inv.id === selectedInvoiceId);
+  const totalAmountItems = activeInvoice ? activeInvoice.items.reduce((s, it) => s + (it.price * it.qty), 0) : 0;
+  const totalAmount = activeInvoice ? Math.max(0, totalAmountItems - (activeInvoice.discount || 0)) : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -66,7 +87,7 @@ export default function LivraisonModal({ isOpen, onClose, preparationInvoices, o
             </div>
             <div>
               <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Expédier pour Livraison</h2>
-              <p className="text-xs text-zinc-500">Passer une facture "En préparation" à "En livraison"</p>
+              <p className="text-xs text-zinc-500">Nom du livreur obligatoire pour passer en livraison</p>
             </div>
           </div>
           <button 
@@ -80,7 +101,7 @@ export default function LivraisonModal({ isOpen, onClose, preparationInvoices, o
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {preparationInvoices.length === 0 ? (
+          {!targetInvoice && preparationInvoices.length === 0 ? (
             <div className="text-center py-8 px-4 bg-zinc-50 dark:bg-zinc-950/40 rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800">
               <Info className="w-8 h-8 text-zinc-400 mx-auto mb-2" />
               <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Aucune facture "En préparation" disponible.</p>
@@ -88,58 +109,70 @@ export default function LivraisonModal({ isOpen, onClose, preparationInvoices, o
             </div>
           ) : (
             <>
-              {/* Select target invoice */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-2">
-                  Sélectionner la Facture de vente *
-                </label>
-                <select
-                  required
-                  value={selectedInvoiceId}
-                  onChange={(e) => setSelectedInvoiceId(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition cursor-pointer"
-                >
-                  <option value="">-- Choisir une facture en attente --</option>
-                  {preparationInvoices.map((inv) => {
-                    const itemsTotal = inv.items.reduce((s, it) => s + (it.price * it.qty), 0);
-                    const total = Math.max(0, itemsTotal - (inv.discount || 0));
-                    return (
-                      <option key={inv.id} value={inv.id}>
-                        {inv.invoiceNumber} - {inv.clientName} ({formatDZD(total)})
-                      </option>
-                    );
-                  })}
-                </select>
-
-                {/* Display chosen invoice summary if any */}
-                {selectedInvoice && (
-                  <div className="mt-3 p-3 bg-zinc-50 dark:bg-zinc-950/30 border border-zinc-100 dark:border-zinc-900 rounded-xl space-y-1">
-                    <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Détails de l'expédition :</p>
-                    <p className="text-xs text-zinc-500">Client : <span className="font-medium text-zinc-800 dark:text-zinc-200">{selectedInvoice.clientName}</span>, Tél : {selectedInvoice.clientPhone}</p>
-                    <p className="text-xs text-zinc-500 line-clamp-1">Adresse : {selectedInvoice.clientAddress}</p>
-                    {selectedInvoice.discount ? (
-                      <p className="text-xs text-red-500 font-bold font-mono">
-                        Montant : {formatDZD(totalAmountItems)} | Remise : -{formatDZD(selectedInvoice.discount)} | Total : {formatDZD(totalAmount)}
-                      </p>
-                    ) : (
-                      <p className="text-xs font-bold text-amber-600 font-mono">
-                        Total : {formatDZD(totalAmount)}
-                      </p>
-                    )}
+              {/* Select target invoice or show fixed targetInvoice */}
+              {targetInvoice ? (
+                <div className="p-3.5 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/30 rounded-xl space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-blue-700 dark:text-blue-400 font-mono">{targetInvoice.invoiceNumber}</span>
+                    <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 font-mono">{formatDZD(totalAmount)}</span>
                   </div>
-                )}
-              </div>
+                  <p className="text-xs text-zinc-700 dark:text-zinc-300 font-medium">Client : <span className="font-semibold">{targetInvoice.clientName}</span> ({targetInvoice.clientPhone})</p>
+                  <p className="text-xs text-zinc-500 line-clamp-1">Adresse : {targetInvoice.clientAddress}</p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-2">
+                    Sélectionner la Facture de vente *
+                  </label>
+                  <select
+                    required
+                    value={selectedInvoiceId}
+                    onChange={(e) => setSelectedInvoiceId(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition cursor-pointer"
+                  >
+                    <option value="">-- Choisir une facture en attente --</option>
+                    {preparationInvoices.map((inv) => {
+                      const itemsTotal = inv.items.reduce((s, it) => s + (it.price * it.qty), 0);
+                      const total = Math.max(0, itemsTotal - (inv.discount || 0));
+                      return (
+                        <option key={inv.id} value={inv.id}>
+                          {inv.invoiceNumber} - {inv.clientName} ({formatDZD(total)})
+                        </option>
+                      );
+                    })}
+                  </select>
 
-              {/* Driver input (Livreur) */}
+                  {/* Display chosen invoice summary if any */}
+                  {activeInvoice && (
+                    <div className="mt-3 p-3 bg-zinc-50 dark:bg-zinc-950/30 border border-zinc-100 dark:border-zinc-900 rounded-xl space-y-1">
+                      <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Détails de l'expédition :</p>
+                      <p className="text-xs text-zinc-500">Client : <span className="font-medium text-zinc-800 dark:text-zinc-200">{activeInvoice.clientName}</span>, Tél : {activeInvoice.clientPhone}</p>
+                      <p className="text-xs text-zinc-500 line-clamp-1">Adresse : {activeInvoice.clientAddress}</p>
+                      {activeInvoice.discount ? (
+                        <p className="text-xs text-red-500 font-bold font-mono">
+                          Montant : {formatDZD(totalAmountItems)} | Remise : -{formatDZD(activeInvoice.discount)} | Total : {formatDZD(totalAmount)}
+                        </p>
+                      ) : (
+                        <p className="text-xs font-bold text-amber-600 font-mono">
+                          Total : {formatDZD(totalAmount)}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Driver input (Livreur) - Obligatoire */}
               <div>
-                <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-2">
-                  Nom du Livreur / Service de livraison *
+                <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                  <span>Nom du Livreur / Service de livraison *</span>
+                  <span className="text-[10px] text-red-500 font-bold uppercase tracking-normal">Obligatoire</span>
                 </label>
                 
-                {/* We'll offer a selectable datalist-like input so they can easily type a name or choose from standard agencies */}
                 <input
                   type="text"
                   required
+                  autoFocus
                   list="livreurs-list"
                   placeholder="Saisissez ou choisissez un livreur"
                   value={livreur}
@@ -148,7 +181,7 @@ export default function LivraisonModal({ isOpen, onClose, preparationInvoices, o
                 />
                 
                 <datalist id="livreurs-list">
-                  {AVAILABLE_LIVREURS.map((l, i) => (
+                  {livreurs.map((l, i) => (
                     <option key={i} value={l} />
                   ))}
                 </datalist>

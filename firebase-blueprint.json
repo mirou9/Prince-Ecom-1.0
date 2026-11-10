@@ -27,6 +27,7 @@
         "livreur": { "type": "string" },
         "deliveryNote": { "type": "string" },
         "totalEncaisse": { "type": "number" },
+        "prixAchat": { "type": "number" },
         "discount": { "type": "number" },
         "treatedBy": { "type": "string", "enum": ["Employé", "Employeur"] },
         "treatedByName": { "type": "string" },
@@ -59,6 +60,17 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "content", "createdAt"]
+    },
+    "LivreurItem": {
+      "title": "LivreurItem",
+      "description": "A delivery driver or delivery service name",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name"]
     }
   },
   "firestore": {
@@ -73,6 +85,10 @@
     "/notes/{noteId}": {
       "schema": "NoteItem",
       "description": "The collection of notes in settings"
+    },
+    "/livreurs/{livreurId}": {
+      "schema": "LivreurItem",
+      "description": "The collection of delivery driver names"
     }
   }
 }

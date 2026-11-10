@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Phone, MapPin, Package, Calendar, User, ChevronDown, ChevronUp, Truck, DollarSign, Award } from 'lucide-react';
+import { Phone, MapPin, Package, Calendar, User, ChevronDown, ChevronUp, Truck, DollarSign, Award, Pencil } from 'lucide-react';
 import { Invoice, OrderStatus, STATUS_COLORS, UserRole } from '../types';
 import { formatDZD } from '../utils';
 
@@ -12,12 +12,13 @@ interface InvoiceCardProps {
   key?: string;
   invoice: Invoice;
   onStatusChange: (id: string, newStatus: OrderStatus) => void;
+  onEditInvoice?: (invoice: Invoice) => void;
   // To show role info if relevant or audit trail
   currentRole?: UserRole;
   isPayPage?: boolean;
 }
 
-export default function InvoiceCard({ invoice, onStatusChange, currentRole, isPayPage = false }: InvoiceCardProps) {
+export default function InvoiceCard({ invoice, onStatusChange, onEditInvoice, currentRole, isPayPage = false }: InvoiceCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -80,14 +81,29 @@ export default function InvoiceCard({ invoice, onStatusChange, currentRole, isPa
         </div>
 
         {/* Custom Pinned Dropdown Status Button Selector */}
-        <div className="relative shrink-0 z-20">
+        <div className="relative shrink-0 z-20 flex items-center gap-1.5">
+          {/* Admin Edit Pencil Icon - Uniquement pour le compte admin (Employeur) */}
+          {currentRole === 'Employeur' && onEditInvoice && (
+            <button
+              type="button"
+              onClick={() => onEditInvoice(invoice)}
+              title="Modifier la facture (Admin)"
+              className="p-1 rounded-lg text-zinc-400 hover:text-amber-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           {invoice.status === 'Payé' ? (
-            <div
-              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border ${activeColors.bg} ${activeColors.text} ${activeColors.border} text-[11px] font-black shadow-2xs`}
+            <button
+              type="button"
+              onClick={() => onStatusChange(invoice.id, 'Payé')}
+              title="Cliquer pour afficher ou modifier les montants (prix d'achat / vente)"
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border ${activeColors.bg} ${activeColors.text} ${activeColors.border} text-[11px] font-black shadow-2xs hover:opacity-85 transition cursor-pointer`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-current" />
               <span>{invoice.status}</span>
-            </div>
+            </button>
           ) : (
             <button
               type="button"
@@ -172,14 +188,24 @@ export default function InvoiceCard({ invoice, onStatusChange, currentRole, isPa
 
       {/* Conditionally Display Sale details if Paye */}
       {invoice.status === 'Payé' && (
-        <div className="p-2 bg-emerald-50/30 dark:bg-emerald-950/10 border border-emerald-150/50 dark:border-emerald-950/25 rounded-lg flex items-center justify-between text-[11px]">
-          <div className="flex items-center gap-1.5">
-            <DollarSign className="w-3.5 h-3.5 text-emerald-500" />
-            <span className="font-medium text-emerald-800 dark:text-emerald-300 font-semibold">Total encaissé :</span>
+        <div className="p-2 bg-emerald-50/30 dark:bg-emerald-950/10 border border-emerald-150/50 dark:border-emerald-950/25 rounded-lg flex flex-col gap-1 text-[11px]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <DollarSign className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="font-semibold text-emerald-800 dark:text-emerald-300">Prix de vente :</span>
+            </div>
+            <span className="font-black text-emerald-600 dark:text-emerald-400 font-mono text-xs">
+              {formatDZD(invoice.totalEncaisse ?? totalAmount)}
+            </span>
           </div>
-          <span className="font-black text-emerald-600 dark:text-emerald-400 font-mono text-xs">
-            {formatDZD(invoice.totalEncaisse ?? totalAmount)}
-          </span>
+          {typeof invoice.prixAchat === 'number' && invoice.prixAchat > 0 && (
+            <div className="flex items-center justify-between text-[10.5px] text-zinc-500 pt-0.5 border-t border-emerald-100/40 dark:border-emerald-950/30">
+              <span>Prix d'achat : <span className="font-bold font-mono text-zinc-700 dark:text-zinc-300">{formatDZD(invoice.prixAchat)}</span></span>
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold font-mono">
+                Bénéfice : +{formatDZD((invoice.totalEncaisse ?? totalAmount) - invoice.prixAchat)}
+              </span>
+            </div>
+          )}
         </div>
       )}
 

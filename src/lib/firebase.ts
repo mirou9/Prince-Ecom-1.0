@@ -6,8 +6,6 @@ import {
   setDoc, 
   getDocs, 
   onSnapshot, 
-  query, 
-  orderBy,
   deleteDoc
 } from 'firebase/firestore';
 import config from '../../firebase-applet-config.json';
@@ -31,20 +29,15 @@ const toPlain = <T>(obj: T): any => {
   return JSON.parse(JSON.stringify(obj));
 };
 
-// Sync Invoices
-export const syncInvoices = (onUpdate: (invoices: Invoice[]) => void, initialFallback: Invoice[]) => {
+// Sync Invoices - starts empty if database is empty
+export const syncInvoices = (onUpdate: (invoices: Invoice[]) => void) => {
   const colRef = collection(db, 'invoices');
   
-  // Real-time listener
-  return onSnapshot(colRef, async (snapshot) => {
+  return onSnapshot(colRef, (snapshot) => {
     if (snapshot.empty) {
-      // If Firestore is empty, initialize it with fallback/local data
-      for (const inv of initialFallback) {
-        await setDoc(doc(db, 'invoices', inv.id), toPlain(inv));
-      }
+      onUpdate([]);
     } else {
       const invoicesList = snapshot.docs.map(doc => doc.data() as Invoice);
-      // Sort invoices by createdAt descending (newest first) or id
       invoicesList.sort((a, b) => {
         const dateA = new Date(a.createdAt || '').getTime();
         const dateB = new Date(b.createdAt || '').getTime();
@@ -52,10 +45,12 @@ export const syncInvoices = (onUpdate: (invoices: Invoice[]) => void, initialFal
       });
       onUpdate(invoicesList);
     }
+  }, (err) => {
+    console.error('Firestore syncInvoices error:', err);
   });
 };
 
-// Save a single invoice or batch of invoices
+// Save a single invoice
 export const saveInvoiceToFirestore = async (invoice: Invoice) => {
   await setDoc(doc(db, 'invoices', invoice.id), toPlain(invoice));
 };
@@ -64,20 +59,19 @@ export const deleteInvoiceFromFirestore = async (id: string) => {
   await deleteDoc(doc(db, 'invoices', id));
 };
 
-// Sync Employees
-export const syncEmployees = (onUpdate: (employees: Employee[]) => void, initialFallback: Employee[]) => {
+// Sync Employees - starts empty if database is empty
+export const syncEmployees = (onUpdate: (employees: Employee[]) => void) => {
   const colRef = collection(db, 'employees');
   
-  return onSnapshot(colRef, async (snapshot) => {
+  return onSnapshot(colRef, (snapshot) => {
     if (snapshot.empty) {
-      // Initialize with fallback
-      for (const emp of initialFallback) {
-        await setDoc(doc(db, 'employees', emp.id), toPlain(emp));
-      }
+      onUpdate([]);
     } else {
       const employeesList = snapshot.docs.map(doc => doc.data() as Employee);
       onUpdate(employeesList);
     }
+  }, (err) => {
+    console.error('Firestore syncEmployees error:', err);
   });
 };
 
@@ -89,22 +83,27 @@ export const deleteEmployeeFromFirestore = async (id: string) => {
   await deleteDoc(doc(db, 'employees', id));
 };
 
-// Interface for Notes since it's defined inside App.tsx / SettingsPane Props
+// Interface for Notes
 export interface NoteItem {
   id: string;
   content: string;
   createdAt: string;
 }
 
-// Sync Notes
+// Sync Notes - starts empty if database is empty
 export const syncNotes = (onUpdate: (notes: NoteItem[]) => void) => {
   const colRef = collection(db, 'notes');
   
   return onSnapshot(colRef, (snapshot) => {
-    const notesList = snapshot.docs.map(doc => doc.data() as NoteItem);
-    // Sort by createdAt descending
-    notesList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    onUpdate(notesList);
+    if (snapshot.empty) {
+      onUpdate([]);
+    } else {
+      const notesList = snapshot.docs.map(doc => doc.data() as NoteItem);
+      notesList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      onUpdate(notesList);
+    }
+  }, (err) => {
+    console.error('Firestore syncNotes error:', err);
   });
 };
 
@@ -114,6 +113,46 @@ export const saveNoteToFirestore = async (note: NoteItem) => {
 
 export const deleteNoteFromFirestore = async (id: string) => {
   await deleteDoc(doc(db, 'notes', id));
+};
+
+// Livreur interface and sync
+export interface LivreurItem {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+// Sync Livreurs - starts empty if database is empty
+export const syncLivreurs = (onUpdate: (livreurs: string[]) => void) => {
+  const colRef = collection(db, 'livreurs');
+  return onSnapshot(colRef, (snapshot) => {
+    if (snapshot.empty) {
+      onUpdate([]);
+    } else {
+      const list = snapshot.docs.map(doc => {
+        const data = doc.data() as LivreurItem;
+        return data.name;
+      }).filter(Boolean);
+      onUpdate(list);
+    }
+  }, (err) => {
+    console.error('Firestore syncLivreurs error:', err);
+  });
+};
+
+export const saveLivreurToFirestore = async (name: string) => {
+  if (!name.trim()) return;
+  const safeId = 'liv-' + encodeURIComponent(name.trim().toLowerCase()).replace(/[^a-zA-Z0-9_-]/g, '_');
+  await setDoc(doc(db, 'livreurs', safeId), toPlain({
+    id: safeId,
+    name: name.trim(),
+    createdAt: new Date().toISOString()
+  }));
+};
+
+export const deleteLivreurFromFirestore = async (name: string) => {
+  const safeId = 'liv-' + encodeURIComponent(name.trim().toLowerCase()).replace(/[^a-zA-Z0-9_-]/g, '_');
+  await deleteDoc(doc(db, 'livreurs', safeId));
 };
 
 export const saveInvoicesToFirestoreBatch = async (newInvoices: Invoice[], oldInvoices: Invoice[]) => {
@@ -182,3 +221,14 @@ export const saveNotesToFirestoreBatch = async (newNotes: NoteItem[], oldNotes: 
   }
 };
 
+// Completely wipe all collections from Firestore
+export const clearAllFirestoreData = async () => {
+  const collections = ['invoices', 'employees', 'notes', 'livreurs'];
+  for (const colName of collections) {
+    const colRef = collection(db, colName);
+    const snap = await getDocs(colRef);
+    for (const docSnap of snap.docs) {
+      await deleteDoc(docSnap.ref);
+    }
+  }
+};

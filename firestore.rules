@@ -7,15 +7,23 @@ service cloud.firestore {
     }
 
     match /invoices/{invoiceId} {
-      allow read, write: if isValidId(invoiceId);
+      allow list: if true;
+      allow get, write: if isValidId(invoiceId);
     }
 
     match /employees/{employeeId} {
-      allow read, write: if isValidId(employeeId);
+      allow list: if true;
+      allow get, write: if isValidId(employeeId);
     }
 
     match /notes/{noteId} {
-      allow read, write: if isValidId(noteId);
+      allow list: if true;
+      allow get, write: if isValidId(noteId);
+    }
+
+    match /livreurs/{livreurId} {
+      allow list: if true;
+      allow get, write: if isValidId(livreurId);
     }
     
     // Default fallback deny rule
