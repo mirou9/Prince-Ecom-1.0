@@ -34,6 +34,9 @@ export interface Invoice {
   // Custom discount / remise
   discount?: number; // in DZD
   
+  // Photo de la facture / bon
+  photoUrl?: string; // Image base64 ou URL de la facture
+
   // Tracking
   treatedBy: UserRole;
   treatedByName?: string;

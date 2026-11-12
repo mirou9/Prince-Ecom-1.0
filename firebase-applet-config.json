@@ -6,5 +6,7 @@
   "firestoreDatabaseId": "ai-studio-princeecom-858df31c-4d39-4a74-a43d-a1ba2e9f826c",
   "storageBucket": "encoded-studio-bjlsj.firebasestorage.app",
   "messagingSenderId": "566200844297",
-  "measurementId": ""
+  "measurementId": "",
+  "oAuthClientId": "566200844297-bbl12u90202ej4a13fuad7ip146m1pfe.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

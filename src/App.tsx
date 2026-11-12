@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Briefcase, 
   Search, 
@@ -32,6 +32,7 @@ import {
   Eye,
   EyeOff,
   Tag,
+  Package,
   X
 } from 'lucide-react';
 
@@ -47,6 +48,7 @@ import CreateEmployeeModal from './components/CreateEmployeeModal';
 
 import {
   syncInvoices,
+  saveInvoiceToFirestore,
   saveInvoicesToFirestoreBatch,
   syncEmployees,
   saveEmployeesToFirestoreBatch,
@@ -478,57 +480,82 @@ function SettingsPane({
 
             {/* Visual statistics dashboard grid */}
             {(() => {
+              // 1. Chiffre d'Affaires Encaissé (Factures Payées uniquement)
               const totalVentes = filteredInvoicesForStats.reduce((acc, curr) => {
                 if (curr.status !== 'Payé') return acc;
-                const itemsTotal = curr.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+                const itemsTotal = (curr.items || []).reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 1)), 0);
                 const total = Math.max(0, itemsTotal - (curr.discount || 0));
                 return acc + (curr.totalEncaisse ?? total);
               }, 0);
 
+              // 2. Coût d'Achat total (factures Payées)
               const totalAchats = filteredInvoicesForStats.reduce((acc, curr) => {
                 if (curr.status !== 'Payé') return acc;
-                return acc + (curr.prixAchat ?? 0);
+                return acc + (Number(curr.prixAchat) || 0);
               }, 0);
 
+              // 3. Bénéfice Net (Ventes - Achats)
               const totalBenefice = totalVentes - totalAchats;
 
-              const empFactures = filteredInvoicesForStats.filter(i => i.treatedBy === 'Employé');
+              // 4. Volume global de toutes les commandes (tous les statuts confondus)
+              const totalVolumeGlobal = filteredInvoicesForStats.reduce((acc, curr) => {
+                const itemsTotal = (curr.items || []).reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 1)), 0);
+                const total = Math.max(0, itemsTotal - (curr.discount || 0));
+                return acc + (curr.status === 'Payé' && curr.totalEncaisse !== undefined ? curr.totalEncaisse : total);
+              }, 0);
+
+              // 5. Total de tous les articles / pièces commandées
+              const totalArticlesCount = filteredInvoicesForStats.reduce((sum, inv) => {
+                return sum + (inv.items || []).reduce((s, it) => s + (Number(it.qty) || 1), 0);
+              }, 0);
+
+              const isEmployerMatch = (inv: Invoice) => {
+                return inv.treatedBy === 'Employeur' || inv.treatedByName === 'PrinceEcom';
+              };
+
+              const empFactures = filteredInvoicesForStats.filter(i => !isEmployerMatch(i));
+              const empArticles = empFactures.reduce((s, inv) => s + (inv.items || []).reduce((q, it) => q + (Number(it.qty) || 1), 0), 0);
               const empVolume = empFactures.reduce((acc, curr) => {
-                const itemsTotal = curr.items.reduce((s, item) => s + (item.price * item.qty), 0);
-                return acc + Math.max(0, itemsTotal - (curr.discount || 0));
+                const itemsTotal = (curr.items || []).reduce((s, item) => s + ((Number(item.price) || 0) * (Number(item.qty) || 1)), 0);
+                const total = Math.max(0, itemsTotal - (curr.discount || 0));
+                return acc + (curr.status === 'Payé' && curr.totalEncaisse !== undefined ? curr.totalEncaisse : total);
               }, 0);
               const empBenefice = empFactures.reduce((acc, curr) => {
                 if (curr.status !== 'Payé') return acc;
-                const itemsTotal = curr.items.reduce((s, it) => s + (it.price * it.qty), 0);
+                const itemsTotal = (curr.items || []).reduce((s, it) => s + ((Number(it.price) || 0) * (Number(it.qty) || 1)), 0);
                 const total = Math.max(0, itemsTotal - (curr.discount || 0));
                 const vente = curr.totalEncaisse ?? total;
-                const achat = curr.prixAchat ?? 0;
+                const achat = Number(curr.prixAchat) || 0;
                 return acc + (vente - achat);
               }, 0);
 
-              const patronFactures = filteredInvoicesForStats.filter(i => i.treatedBy === 'Employeur');
+              const patronFactures = filteredInvoicesForStats.filter(i => isEmployerMatch(i));
+              const patronArticles = patronFactures.reduce((s, inv) => s + (inv.items || []).reduce((q, it) => q + (Number(it.qty) || 1), 0), 0);
               const patronVolume = patronFactures.reduce((acc, curr) => {
-                const itemsTotal = curr.items.reduce((s, item) => s + (item.price * item.qty), 0);
-                return acc + Math.max(0, itemsTotal - (curr.discount || 0));
+                const itemsTotal = (curr.items || []).reduce((s, item) => s + ((Number(item.price) || 0) * (Number(item.qty) || 1)), 0);
+                const total = Math.max(0, itemsTotal - (curr.discount || 0));
+                return acc + (curr.status === 'Payé' && curr.totalEncaisse !== undefined ? curr.totalEncaisse : total);
               }, 0);
               const patronBenefice = patronFactures.reduce((acc, curr) => {
                 if (curr.status !== 'Payé') return acc;
-                const itemsTotal = curr.items.reduce((s, it) => s + (it.price * it.qty), 0);
+                const itemsTotal = (curr.items || []).reduce((s, it) => s + ((Number(it.price) || 0) * (Number(it.qty) || 1)), 0);
                 const total = Math.max(0, itemsTotal - (curr.discount || 0));
                 const vente = curr.totalEncaisse ?? total;
-                const achat = curr.prixAchat ?? 0;
+                const achat = Number(curr.prixAchat) || 0;
                 return acc + (vente - achat);
               }, 0);
 
+              const payeesCount = filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length;
+
               return (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
                     {/* 1. BENEFICE / GAIN TOTAL CARD */}
                     <div className="bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-transparent dark:from-emerald-950/40 dark:via-zinc-900 dark:to-zinc-900 rounded-xl border-2 border-emerald-500/40 p-4 shadow-sm space-y-1 relative overflow-hidden">
                       <div className="flex justify-between items-center text-emerald-600 dark:text-emerald-400">
                         <span className="text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
                           <TrendingUp className="w-3.5 h-3.5" />
-                          <span>Bénéfices / Gain Total</span>
+                          <span>Bénéfices / Gain Net</span>
                         </span>
                         <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
                           Net
@@ -542,7 +569,7 @@ function SettingsPane({
                       </p>
                     </div>
 
-                    {/* 2. Revenue Card */}
+                    {/* 2. Revenue Card (Payé réel) */}
                     <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
                       <div className="flex justify-between items-center text-zinc-400">
                         <span className="text-[10px] font-bold uppercase tracking-wider">Chiffre d’Affaires</span>
@@ -554,7 +581,31 @@ function SettingsPane({
                       <p className="text-[10px] text-zinc-400">Total payé réel (DA)</p>
                     </div>
 
-                    {/* 3. Cost of Purchase Card */}
+                    {/* 3. Global Orders Volume (All statuses) */}
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Volume Global</span>
+                        <Briefcase className="w-4 h-4 text-amber-500" />
+                      </div>
+                      <p className="text-lg font-black font-mono text-amber-600 dark:text-amber-400">
+                        {formatDZD(totalVolumeGlobal)}
+                      </p>
+                      <p className="text-[10px] text-zinc-400">Toutes commandes (DA)</p>
+                    </div>
+
+                    {/* 4. Total Articles (Quantités cumulées) */}
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Total Articles</span>
+                        <Package className="w-4 h-4 text-purple-500" />
+                      </div>
+                      <p className="text-lg font-black font-mono text-purple-600 dark:text-purple-400">
+                        {totalArticlesCount} pièce{totalArticlesCount > 1 ? 's' : ''}
+                      </p>
+                      <p className="text-[10px] text-zinc-400">Quantité totale d'articles</p>
+                    </div>
+
+                    {/* 5. Cost of Purchase Card */}
                     <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
                       <div className="flex justify-between items-center text-zinc-400">
                         <span className="text-[10px] font-bold uppercase tracking-wider">Coût d'Achat</span>
@@ -566,29 +617,17 @@ function SettingsPane({
                       <p className="text-[10px] text-zinc-400">Achats factures payées</p>
                     </div>
 
-                    {/* 4. Volume orders */}
+                    {/* 6. Volume orders & Rate */}
                     <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
                       <div className="flex justify-between items-center text-zinc-400">
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Total Factures</span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Total Commandes</span>
                         <Users className="w-4 h-4 text-[#171b34] dark:text-[#f8ef1d]" />
                       </div>
                       <p className="text-lg font-black text-zinc-800 dark:text-zinc-200 font-mono">
                         {filteredInvoicesForStats.length} PE
                       </p>
-                      <p className="text-[10px] text-zinc-400">Commandes filtrées</p>
-                    </div>
-
-                    {/* 5. Status checklist metrics */}
-                    <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-2xs space-y-1">
-                      <div className="flex justify-between items-center text-zinc-400">
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Taux d'encaissement</span>
-                        <CheckCircle className="w-4 h-4 text-emerald-500" />
-                      </div>
-                      <p className="text-lg font-black font-mono text-emerald-600 dark:text-emerald-450">
-                        {filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length} réglées
-                      </p>
-                      <p className="text-[10px] text-zinc-450">
-                        {filteredInvoicesForStats.length > 0 ? Math.round((filteredInvoicesForStats.filter(inv => inv.status === 'Payé').length / filteredInvoicesForStats.length) * 100) : 0}% des ventes closes
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                        {payeesCount} réglée{payeesCount > 1 ? 's' : ''} ({filteredInvoicesForStats.length > 0 ? Math.round((payeesCount / filteredInvoicesForStats.length) * 100) : 0}%)
                       </p>
                     </div>
                   </div>
@@ -607,6 +646,10 @@ function SettingsPane({
                         <div className="flex justify-between items-center">
                           <span className="text-xs text-zinc-500">Factures prises en charge:</span>
                           <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{empFactures.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="text-xs text-zinc-500">Articles traités:</span>
+                          <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{empArticles} pièce{empArticles > 1 ? 's' : ''}</span>
                         </div>
                         <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
                           <span className="text-xs text-zinc-500">Volume généré:</span>
@@ -630,6 +673,10 @@ function SettingsPane({
                         <div className="flex justify-between items-center">
                           <span className="text-xs text-zinc-500">Factures prises en charge:</span>
                           <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{patronFactures.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="text-xs text-zinc-500">Articles traités:</span>
+                          <span className="text-xs font-bold font-mono text-zinc-800 dark:text-zinc-200">{patronArticles} pièce{patronArticles > 1 ? 's' : ''}</span>
                         </div>
                         <div className="flex justify-between items-center pt-1 border-t border-zinc-100 dark:border-zinc-800">
                           <span className="text-xs text-zinc-500">Volume généré:</span>
@@ -850,7 +897,7 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans">
+    <div className="min-h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans">
       {/* Subtle background glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/3 w-80 h-80 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -875,7 +922,7 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
         </div>
 
         {/* Content Card */}
-        <div className="bg-zinc-900/80 backdrop-blur-md rounded-2xl border border-zinc-800 p-6 shadow-2xl space-y-5 animate-scaleIn">
+        <div className="bg-zinc-900/95 rounded-2xl border border-zinc-800 p-6 shadow-2xl space-y-5 animate-scaleIn">
           <form onSubmit={handleFormSubmit} className="space-y-4">
             
             {errorError && (
@@ -1127,14 +1174,16 @@ export default function App() {
     setIsEditOpen(true);
   };
 
-  const handleConfirmEditInvoice = (updatedInvoice: Invoice) => {
+  const handleConfirmEditInvoice = async (updatedInvoice: Invoice) => {
     const updated = invoices.map(inv => {
       if (inv.id === updatedInvoice.id) {
         return updatedInvoice;
       }
       return inv;
     });
-    saveInvoices(updated);
+    setInvoices(updated);
+    localStorage.setItem('prince_ecom_invoices', JSON.stringify(updated));
+    await saveInvoiceToFirestore(updatedInvoice);
   };
 
   // Change individual order status from card dropdown
@@ -1220,60 +1269,80 @@ export default function App() {
     return false;
   };
 
-  // First, fuzzy search the complete collection
-  const visibleInvoices = currentRole === 'Employé'
-    ? invoices.filter(inv => inv.treatedByName === currentUserName)
-    : invoices;
+  // First, fuzzy search the complete collection (memoized)
+  const visibleInvoices = useMemo(() => {
+    return currentRole === 'Employé'
+      ? invoices.filter(inv => inv.treatedByName === currentUserName)
+      : invoices;
+  }, [invoices, currentRole, currentUserName]);
 
-  const searchedInvoices = fuzzySearchInvoices(visibleInvoices, searchQuery);
+  const searchedInvoices = useMemo(() => {
+    return fuzzySearchInvoices(visibleInvoices, searchQuery);
+  }, [visibleInvoices, searchQuery]);
 
   // Invoices currently under En préparation
-  const preparationList = searchedInvoices.filter(inv => inv.status === 'En préparation');
+  const preparationList = useMemo(() => {
+    return searchedInvoices.filter(inv => inv.status === 'En préparation');
+  }, [searchedInvoices]);
   
   // Sort Page 1 dynamically and apply employee filter
-  const sortedPage1List = [...preparationList]
-    .filter(inv => matchFilter(inv, p1TreatedByFilter))
-    .sort((a, b) => {
-      const itemsTotalA = a.items.reduce((sum, i) => sum + i.price * i.qty, 0);
-      const totalA = Math.max(0, itemsTotalA - (a.discount || 0));
-      const itemsTotalB = b.items.reduce((sum, i) => sum + i.price * i.qty, 0);
-      const totalB = Math.max(0, itemsTotalB - (b.discount || 0));
-      return p1SortOrder === 'desc' ? totalB - totalA : totalA - totalB;
-    });
+  const sortedPage1List = useMemo(() => {
+    return [...preparationList]
+      .filter(inv => matchFilter(inv, p1TreatedByFilter))
+      .sort((a, b) => {
+        const itemsTotalA = a.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+        const totalA = Math.max(0, itemsTotalA - (a.discount || 0));
+        const itemsTotalB = b.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+        const totalB = Math.max(0, itemsTotalB - (b.discount || 0));
+        return p1SortOrder === 'desc' ? totalB - totalA : totalA - totalB;
+      });
+  }, [preparationList, p1TreatedByFilter, p1SortOrder]);
 
   // Invoices currently under En livraison
-  const livraisonList = searchedInvoices.filter(inv => 
-    inv.status === 'En livraison'
-  );
+  const livraisonList = useMemo(() => {
+    return searchedInvoices.filter(inv => inv.status === 'En livraison');
+  }, [searchedInvoices]);
+
   // Refine Page 2 list with submenu filters
-  const filteredPage2List = livraisonList
-    .filter(inv => matchFilter(inv, p2TreatedByFilter));
+  const filteredPage2List = useMemo(() => {
+    return livraisonList.filter(inv => matchFilter(inv, p2TreatedByFilter));
+  }, [livraisonList, p2TreatedByFilter]);
 
   // Invoices currently under Livré
-  const livreList = searchedInvoices.filter(inv => inv.status === 'Livré');
+  const livreList = useMemo(() => {
+    return searchedInvoices.filter(inv => inv.status === 'Livré');
+  }, [searchedInvoices]);
+
   // Sort or filter Page 3 dynamically
-  const filteredPage3List = livreList.filter(inv => matchFilter(inv, p3TreatedByFilter));
+  const filteredPage3List = useMemo(() => {
+    return livreList.filter(inv => matchFilter(inv, p3TreatedByFilter));
+  }, [livreList, p3TreatedByFilter]);
 
   // Invoices currently in Historique (Payé ou Annulé)
-  const historiqueList = searchedInvoices.filter(inv => inv.status === 'Payé' || inv.status === 'Annulé');
-  const filteredPage4List = historiqueList.filter(inv => matchFilter(inv, p4TreatedByFilter));
+  const historiqueList = useMemo(() => {
+    return searchedInvoices.filter(inv => inv.status === 'Payé' || inv.status === 'Annulé');
+  }, [searchedInvoices]);
 
-  // Current page counter badges
-  const badgePrep = visibleInvoices.filter(inv => inv.status === 'En préparation').length;
-  const badgeLiv = visibleInvoices.filter(inv => inv.status === 'En livraison').length;
-  const badgeLivre = visibleInvoices.filter(inv => inv.status === 'Livré').length;
-  const badgeHistorique = visibleInvoices.filter(inv => inv.status === 'Payé' || inv.status === 'Annulé').length;
+  const filteredPage4List = useMemo(() => {
+    return historiqueList.filter(inv => matchFilter(inv, p4TreatedByFilter));
+  }, [historiqueList, p4TreatedByFilter]);
+
+  // Current page counter badges (memoized)
+  const badgePrep = useMemo(() => visibleInvoices.filter(inv => inv.status === 'En préparation').length, [visibleInvoices]);
+  const badgeLiv = useMemo(() => visibleInvoices.filter(inv => inv.status === 'En livraison').length, [visibleInvoices]);
+  const badgeLivre = useMemo(() => visibleInvoices.filter(inv => inv.status === 'Livré').length, [visibleInvoices]);
+  const badgeHistorique = useMemo(() => visibleInvoices.filter(inv => inv.status === 'Payé' || inv.status === 'Annulé').length, [visibleInvoices]);
 
   if (!isLoggedIn) {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 pb-28 text-zinc-900 dark:text-zinc-100 font-sans transition-colors duration-200">
+    <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 pb-28 text-zinc-900 dark:text-zinc-100 font-sans transition-colors duration-200">
       
       {/* 1. Main Header with Role Selection Controls */}
-      <header className="sticky top-0 bg-white/90 dark:bg-zinc-900/95 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800/80 z-40 transition-all duration-150 shadow-xs">
-        <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 py-1.5 sm:py-2.5">
+      <header className="sticky top-0 bg-white/95 dark:bg-zinc-900/95 border-b border-zinc-200 dark:border-zinc-800/80 z-40 transition-all duration-150 shadow-xs transform-gpu">
+        <div className="w-full max-w-3xl lg:max-w-4xl mx-auto px-3 sm:px-6 py-1.5 sm:py-2.5">
           <div className="flex flex-row justify-between items-center gap-1.5 sm:gap-3">
             
             {/* Logo and Name with literal title as logo */}
@@ -1359,7 +1428,7 @@ export default function App() {
       </header>
 
       {/* 2. Page Area Container */}
-      <main className="w-full max-w-5xl mx-auto px-4 sm:px-6 mt-6 space-y-6">
+      <main className="w-full max-w-3xl mx-auto px-3 sm:px-4 mt-4 sm:mt-6 pb-24 space-y-6">
 
         {showSettings && currentRole === 'Employeur' ? (
           <SettingsPane
@@ -1545,7 +1614,7 @@ export default function App() {
                 <p className="text-[11px] text-zinc-400 mt-0.5">Cliquez sur le bouton "+" en bas à droite pour créer votre première facture !</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {sortedPage1List.map((invoice) => (
                   <InvoiceCard 
                     key={invoice.id} 
@@ -1579,7 +1648,7 @@ export default function App() {
                 <p className="text-[11px] text-zinc-400 mt-0.5">Associez un livreur à une facture "En préparation" à l'aide du bouton "+" pour la faire basculer ici.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {filteredPage2List.map((invoice) => (
                   <InvoiceCard 
                     key={invoice.id} 
@@ -1617,7 +1686,7 @@ export default function App() {
                 <p className="text-[11px] text-zinc-400 mt-0.5">Changez le statut d'une commande "En livraison" à "Livré" pour l'afficher ici.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {filteredPage3List.map((invoice) => (
                   <InvoiceCard 
                     key={invoice.id} 
@@ -1679,7 +1748,7 @@ export default function App() {
                 <p className="text-[11px] text-zinc-400 mt-0.5">Les factures annulées ou payées s'afficheront directement ici.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {filteredPage4List.map((invoice) => (
                   <InvoiceCard 
                     key={invoice.id} 
@@ -1702,7 +1771,7 @@ export default function App() {
       
       {/* Page 1 (En préparation): Bottom-right FAB button */}
       {activeTab === 'En préparation' && !showSettings && (
-        <div className="fixed bottom-24 right-6 z-30">
+        <div className="fixed bottom-24 right-6 z-30 transform-gpu">
           <button
             type="button"
             id="fab-create-invoice"
@@ -1718,7 +1787,7 @@ export default function App() {
       {/* Page 2 (En livraison): Bottom-right FAB button */}
       {/* ROLE RESTRICTION: This button gives option to initiate Delivery or Direct Sale. */}
       {activeTab === 'En livraison' && !showSettings && (
-        <div className="fixed bottom-24 right-6 z-30 flex flex-col items-end space-y-3">
+        <div className="fixed bottom-24 right-6 z-30 flex flex-col items-end space-y-3 transform-gpu">
           
           {/* Expandable sub-buttons overlay */}
           {showPage2SubMenu && (
@@ -1770,7 +1839,7 @@ export default function App() {
 
 
       {/* ----------------- 4. PINNED BOTTOM NAVIGATION BAR ----------------- */}
-      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-white/95 dark:bg-zinc-900/95 border-t border-zinc-200 dark:border-zinc-800 backdrop-blur-md flex items-center justify-around px-4 z-40 shadow-xl transition-all duration-200">
+      <nav className="fixed bottom-0 left-0 right-0 h-20 pb-[env(safe-area-inset-bottom)] bg-white/95 dark:bg-zinc-900/95 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-around px-4 z-40 shadow-xl transform-gpu transition-all duration-200">
         <div className="w-full max-w-lg mx-auto flex justify-between items-center">
           
           {/* Tab 1: En préparation */}

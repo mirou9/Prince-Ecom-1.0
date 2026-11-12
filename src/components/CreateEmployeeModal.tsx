@@ -60,7 +60,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onSubmit }: Creat
         onClick={onClose} 
       />
 
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-[100dvh] items-center justify-center p-4">
         <div className="relative w-full max-w-md transform rounded-2xl bg-white p-6 shadow-2xl transition-all border border-zinc-150 animate-scaleIn">
           
           {/* Header Row */}

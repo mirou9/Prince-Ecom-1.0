@@ -4,9 +4,10 @@
  */
 
 import React, { useState } from 'react';
-import { Phone, MapPin, Package, Calendar, User, ChevronDown, ChevronUp, Truck, DollarSign, Award, Pencil } from 'lucide-react';
+import { Phone, MapPin, Package, Calendar, User, ChevronDown, ChevronUp, Truck, DollarSign, Award, Pencil, FileText } from 'lucide-react';
 import { Invoice, OrderStatus, STATUS_COLORS, UserRole } from '../types';
 import { formatDZD } from '../utils';
+import PhotoModal from './PhotoModal';
 
 interface InvoiceCardProps {
   key?: string;
@@ -18,11 +19,13 @@ interface InvoiceCardProps {
   isPayPage?: boolean;
 }
 
-export default function InvoiceCard({ invoice, onStatusChange, onEditInvoice, currentRole, isPayPage = false }: InvoiceCardProps) {
+function InvoiceCard({ invoice, onStatusChange, onEditInvoice, currentRole, isPayPage = false }: InvoiceCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [isPhotoOpen, setIsPhotoOpen] = useState(false);
 
-  const itemsTotal = invoice.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+  const totalArticlesQty = (invoice.items || []).reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
+  const itemsTotal = (invoice.items || []).reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 1)), 0);
   const totalAmount = Math.max(0, itemsTotal - (invoice.discount || 0));
   const initials = invoice.clientName
     .split(' ')
@@ -54,7 +57,8 @@ export default function InvoiceCard({ invoice, onStatusChange, onEditInvoice, cu
   return (
     <div 
       id={`invoice-${invoice.id}`}
-      className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-3.5 shadow-xs hover:shadow-xs hover:border-zinc-300 dark:hover:border-zinc-750 transition duration-150 flex flex-col space-y-2.5 relative"
+      className="card-content-auto bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-3.5 shadow-xs hover:shadow-xs hover:border-zinc-300 dark:hover:border-zinc-750 transition duration-150 flex flex-col space-y-2.5 relative"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 160px' }}
     >
       {/* Top Header Row */}
       <div className="flex items-center justify-between gap-2 border-b border-zinc-100 dark:border-zinc-805 pb-2">
@@ -82,6 +86,21 @@ export default function InvoiceCard({ invoice, onStatusChange, onEditInvoice, cu
 
         {/* Custom Pinned Dropdown Status Button Selector */}
         <div className="relative shrink-0 z-20 flex items-center gap-1.5">
+          {/* Petit icône facture qui ouvre la photo si enregistrée */}
+          {invoice.photoUrl && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsPhotoOpen(true);
+              }}
+              title="Voir la photo de la facture / bon"
+              className="p-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/40 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/60 hover:scale-105 transition cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           {/* Admin Edit Pencil Icon - Uniquement pour le compte admin (Employeur) */}
           {currentRole === 'Employeur' && onEditInvoice && (
             <button
@@ -219,7 +238,7 @@ export default function InvoiceCard({ invoice, onStatusChange, onEditInvoice, cu
           <div className="flex items-center space-x-1.5">
             <Package className="w-3 h-3 text-zinc-400 shadow-3xs" />
             <span>
-              {invoice.items.length} article{invoice.items.length > 1 ? 's' : ''} ({formatDZD(totalAmount)})
+              {totalArticlesQty} article{totalArticlesQty > 1 ? 's' : ''} ({formatDZD(totalAmount)})
             </span>
           </div>
           {isExpanded ? (
@@ -262,9 +281,38 @@ export default function InvoiceCard({ invoice, onStatusChange, onEditInvoice, cu
               <span>Total</span>
               <span className="font-mono text-amber-600 dark:text-amber-400">{formatDZD(totalAmount)}</span>
             </div>
+
+            {invoice.photoUrl && (
+              <div className="py-1.5 flex items-center justify-between text-[11px] border-t border-zinc-100 dark:border-zinc-800/80">
+                <span className="text-zinc-500 font-semibold flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Photo de la facture :</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsPhotoOpen(true);
+                  }}
+                  className="text-amber-600 dark:text-amber-400 font-bold hover:underline cursor-pointer flex items-center gap-1 text-[11px]"
+                >
+                  <span>Afficher la photo</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* Photo Viewer Modal */}
+      <PhotoModal
+        isOpen={isPhotoOpen}
+        onClose={() => setIsPhotoOpen(false)}
+        photoUrl={invoice.photoUrl}
+        title={`Facture ${invoice.invoiceNumber} • ${invoice.clientName}`}
+      />
     </div>
   );
 }
+
+export default React.memo(InvoiceCard);

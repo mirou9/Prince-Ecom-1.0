@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { X, Plus, Trash2, ShoppingBag } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { X, Plus, Trash2, ShoppingBag, Camera } from 'lucide-react';
 import { Invoice, OrderItem, UserRole } from '../types';
-import { formatDZD } from '../utils';
+import { formatDZD, compressImageFile } from '../utils';
+import PhotoModal from './PhotoModal';
 
 interface CreateInvoiceModalProps {
   isOpen: boolean;
@@ -21,13 +22,27 @@ export default function CreateInvoiceModal({ isOpen, onClose, onSubmit, currentR
   const [clientAddress, setClientAddress] = useState('');
   const [discount, setDiscount] = useState<number>(0);
   const [manualInvoiceNumber, setManualInvoiceNumber] = useState('');
+  const [photoUrl, setPhotoUrl] = useState<string>('');
+  const [isPhotoPreviewOpen, setIsPhotoPreviewOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   
   // Custom items list representation
   const [items, setItems] = useState<Omit<OrderItem, 'id'>[]>([
     { name: '', qty: 1, price: 0 }
   ]);
 
-  if (!isOpen) return null;
+  const handlePhotoCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImageFile(file);
+      setPhotoUrl(compressed);
+    } catch (err) {
+      console.error('Erreur compression image:', err);
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   const handleAddItem = () => {
     setItems([...items, { name: '', qty: 1, price: 0 }]);
@@ -79,6 +94,7 @@ export default function CreateInvoiceModal({ isOpen, onClose, onSubmit, currentR
       items: finalItems,
       treatedBy: currentRole,
       discount: discount,
+      photoUrl: photoUrl || undefined,
       manualInvoiceNumber: manualInvoiceNumber.trim() ? manualInvoiceNumber.trim() : undefined
     });
 
@@ -88,9 +104,12 @@ export default function CreateInvoiceModal({ isOpen, onClose, onSubmit, currentR
     setClientAddress('');
     setDiscount(0);
     setManualInvoiceNumber('');
+    setPhotoUrl('');
     setItems([{ name: '', qty: 1, price: 0 }]);
     onClose();
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -113,17 +132,100 @@ export default function CreateInvoiceModal({ isOpen, onClose, onSubmit, currentR
               <p className="text-xs text-zinc-500">Statut initial : En préparation</p>
             </div>
           </div>
-          <button 
-            type="button"
-            onClick={onClose} 
-            className="p-1 px-1.5 py-1 rounded-lg text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          
+          <div className="flex items-center space-x-2">
+            {/* Hidden Camera Input */}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              ref={fileInputRef}
+              onChange={handlePhotoCapture}
+              className="hidden"
+            />
+            {/* Very Small Camera Button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title={photoUrl ? "Changer la photo de la facture" : "Prendre / ajouter une photo de la facture"}
+              className={`p-1.5 rounded-lg border transition cursor-pointer flex items-center justify-center ${
+                photoUrl 
+                  ? 'bg-amber-500 text-white border-amber-600 shadow-xs' 
+                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:text-amber-600 dark:hover:text-amber-400'
+              }`}
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+
+            <button 
+              type="button"
+              onClick={onClose} 
+              className="p-1 px-1.5 py-1 rounded-lg text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          
+          {/* Photo Preview Strip if attached */}
+          {photoUrl && (
+            <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between animate-fadeIn">
+              <div className="flex items-center space-x-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsPhotoPreviewOpen(true)}
+                  className="relative group cursor-pointer"
+                  title="Agrandir la photo de la facture"
+                >
+                  <img
+                    src={photoUrl}
+                    alt="Aperçu facture"
+                    className="w-10 h-10 object-cover rounded-lg border border-amber-400 shadow-2xs group-hover:opacity-90 transition"
+                  />
+                  <span className="absolute inset-0 bg-black/30 group-hover:bg-black/50 rounded-lg flex items-center justify-center text-white text-[9px] font-black opacity-0 group-hover:opacity-100 transition">
+                    VOIR
+                  </span>
+                </button>
+                <div>
+                  <p className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-1">
+                    <span>📸 Photo de facture jointe</span>
+                  </p>
+                  <p className="text-[10px] text-zinc-500">
+                    Sera enregistrée avec la facture
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-1">
+                <button
+                  type="button"
+                  onClick={() => setIsPhotoPreviewOpen(true)}
+                  className="px-2 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 rounded-lg transition cursor-pointer"
+                >
+                  Aperçu
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-1 text-zinc-400 hover:text-amber-600 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                  title="Reprendre la photo"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhotoUrl('')}
+                  className="p-1 text-zinc-400 hover:text-rose-500 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                  title="Supprimer la photo"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
           
           {/* Client details section */}
           <div>
@@ -316,6 +418,14 @@ export default function CreateInvoiceModal({ isOpen, onClose, onSubmit, currentR
 
         </form>
       </div>
+
+      {/* Photo Preview Modal */}
+      <PhotoModal
+        isOpen={isPhotoPreviewOpen}
+        onClose={() => setIsPhotoPreviewOpen(false)}
+        photoUrl={photoUrl}
+        title="Photo de la Facture"
+      />
     </div>
   );
 }
