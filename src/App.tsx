@@ -33,6 +33,9 @@ import {
   EyeOff,
   Tag,
   Package,
+  Phone,
+  ToggleLeft,
+  Pencil,
   X
 } from 'lucide-react';
 
@@ -51,6 +54,8 @@ import {
   saveInvoiceToFirestore,
   saveInvoicesToFirestoreBatch,
   syncEmployees,
+  saveEmployeeToFirestore,
+  deleteEmployeeFromFirestore,
   saveEmployeesToFirestoreBatch,
   syncNotes,
   saveNotesToFirestoreBatch,
@@ -74,6 +79,8 @@ interface SettingsPaneProps {
   formatDZD: (val: number) => string;
   onClearAllData: () => Promise<void> | void;
   saveEmployees: (newEmployees: Employee[]) => void;
+  onUpdateEmployee: (updatedEmployee: Employee) => Promise<void> | void;
+  onDeleteEmployee: (employeeId: string) => Promise<void> | void;
 }
 
 function SettingsPane({
@@ -85,15 +92,21 @@ function SettingsPane({
   setShowSettings,
   formatDZD,
   onClearAllData,
-  saveEmployees
+  onUpdateEmployee,
+  onDeleteEmployee
 }: SettingsPaneProps) {
   const [password, setPassword] = useState('');
   const [showPasswordInput, setShowPasswordInput] = useState(false);
   const [pwdError, setPwdError] = useState('');
 
-  const [selectedEmployeeForPassword, setSelectedEmployeeForPassword] = useState<Employee | null>(null);
-  const [newPassword, setNewPassword] = useState('');
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editRole, setEditRole] = useState('Vendeur');
+  const [editStatus, setEditStatus] = useState<'Actif' | 'Inactif'>('Actif');
+  const [editPassword, setEditPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [confirmDeleteEmployee, setConfirmDeleteEmployee] = useState(false);
   const [modalError, setModalError] = useState('');
 
   const [notes, setNotes] = useState<NoteItem[]>([]);
@@ -130,25 +143,41 @@ function SettingsPane({
     await saveNotesToFirestoreBatch(updatedNotes, notes);
   };
 
-  const handleSavePassword = (e: React.FormEvent) => {
+  const handleSaveEmployeeInfo = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEmployeeForPassword) return;
-    if (!newPassword.trim()) {
+    if (!selectedEmployee) return;
+    if (!editName.trim()) {
+      setModalError('Le nom complet ne peut pas être vide.');
+      return;
+    }
+    if (!editPhone.trim()) {
+      setModalError('Le numéro de téléphone ne peut pas être vide.');
+      return;
+    }
+    if (!editPassword.trim()) {
       setModalError('Le mot de passe ne peut pas être vide.');
       return;
     }
-    const updatedEmployees = employees.map(emp => {
-      if (emp.id === selectedEmployeeForPassword.id) {
-        return {
-          ...emp,
-          password: newPassword.trim()
-        };
-      }
-      return emp;
-    });
-    saveEmployees(updatedEmployees);
-    setSelectedEmployeeForPassword(null);
-    alert(`Le mot de passe de ${selectedEmployeeForPassword.name} a été enregistré avec succès !`);
+
+    const updatedEmployee: Employee = {
+      ...selectedEmployee,
+      name: editName.trim(),
+      phone: editPhone.trim(),
+      role: editRole,
+      status: editStatus,
+      password: editPassword.trim()
+    };
+
+    await onUpdateEmployee(updatedEmployee);
+    setSelectedEmployee(null);
+    setConfirmDeleteEmployee(false);
+  };
+
+  const handleDeleteSelectedEmployee = async () => {
+    if (!selectedEmployee) return;
+    await onDeleteEmployee(selectedEmployee.id);
+    setSelectedEmployee(null);
+    setConfirmDeleteEmployee(false);
   };
 
   return (
@@ -296,21 +325,30 @@ function SettingsPane({
                 <div 
                   key={emp.id}
                   onClick={() => {
-                    setSelectedEmployeeForPassword(emp);
-                    setNewPassword(emp.password || '123');
+                    setSelectedEmployee(emp);
+                    setEditName(emp.name || '');
+                    setEditPhone(emp.phone || '');
+                    setEditRole(emp.role || 'Vendeur');
+                    setEditStatus(emp.status || 'Actif');
+                    setEditPassword(emp.password || '123');
                     setShowPassword(false);
+                    setConfirmDeleteEmployee(false);
                     setModalError('');
                   }}
                   className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-2xs hover:shadow-xs cursor-pointer hover:border-amber-500/55 dark:hover:border-amber-400/50 hover:bg-amber-500/[0.01] dark:hover:bg-amber-400/[0.01] transition duration-150 flex flex-col justify-between"
-                  title="Cliquez pour changer le mot de passe"
+                  title="Cliquez pour modifier les informations de l'employé"
                 >
                   <div className="space-y-3">
                     <div className="flex justify-between items-start">
                       <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 px-2 py-0.5 rounded-md font-bold uppercase tracking-wider">
                         {emp.role}
                       </span>
-                      <span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-100 dark:bg-emerald-950/25 dark:text-emerald-400 dark:border-emerald-900/40 rounded-md font-black">
-                        🟢 {emp.status}
+                      <span className={`text-[10px] px-2 py-0.5 rounded-md font-black border ${
+                        emp.status === 'Inactif'
+                          ? 'bg-red-50 text-red-700 border-red-100 dark:bg-red-950/25 dark:text-red-400 dark:border-red-900/40'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-950/25 dark:text-emerald-400 dark:border-emerald-900/40'
+                      }`}>
+                        {emp.status === 'Inactif' ? '🔴' : '🟢'} {emp.status}
                       </span>
                     </div>
 
@@ -775,63 +813,119 @@ function SettingsPane({
         </button>
       </div>
 
-      {/* Pop-up de modification de mot de passe de l'employé */}
-      {selectedEmployeeForPassword && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      {/* Pop-up de modification des informations de l'employé */}
+      {selectedEmployee && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-y-auto">
           {/* Backdrop */}
           <div 
-            className="absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
-            onClick={() => setSelectedEmployeeForPassword(null)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
+            onClick={() => {
+              setSelectedEmployee(null);
+              setConfirmDeleteEmployee(false);
+            }}
           />
           
           {/* Container */}
-          <div className="relative w-full max-w-sm bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden animate-fadeIn text-zinc-950 dark:text-zinc-50">
+          <div className="relative w-full max-w-md max-h-[90dvh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 flex flex-col animate-fadeIn text-zinc-950 dark:text-zinc-50">
             {/* Header */}
-            <div className="p-4 border-b border-zinc-150 dark:border-zinc-800 flex items-center justify-between bg-zinc-50 dark:bg-zinc-900">
+            <div className="p-4 border-b border-zinc-150 dark:border-zinc-800 flex items-center justify-between bg-zinc-50 dark:bg-zinc-900 sticky top-0 z-10">
               <div className="flex items-center space-x-2.5">
-                <div className="p-1.5 bg-amber-500/10 rounded-lg">
-                  <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <div className="p-1.5 bg-[#171b34] text-[#f8ef1d] rounded-lg">
+                  <Pencil className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-zinc-900 dark:text-zinc-100">
-                    Modifier le Mot de Passe
+                    Modifier les informations de l'employé
                   </h3>
                   <p className="text-[10px] text-zinc-500">
-                    Employé : {selectedEmployeeForPassword.name}
+                    Employé : {selectedEmployee.name}
                   </p>
                 </div>
               </div>
               <button 
                 type="button"
-                onClick={() => setSelectedEmployeeForPassword(null)} 
-                className="p-1 rounded-lg text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+                onClick={() => {
+                  setSelectedEmployee(null);
+                  setConfirmDeleteEmployee(false);
+                }} 
+                className="p-1 rounded-lg text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Form */}
-            <form onSubmit={handleSavePassword} className="p-5 space-y-4">
-              <div className="space-y-1">
-                <label className="block text-[11px] font-bold text-zinc-650 dark:text-zinc-400">
-                  Nouveau Mot de Passe
+            <form onSubmit={handleSaveEmployeeInfo} className="p-5 space-y-4">
+              {modalError && (
+                <div className="p-2 bg-red-50 text-red-600 rounded-lg text-xs font-bold border border-red-100">
+                  ⚠️ {modalError}
+                </div>
+              )}
+
+              {/* Nom Complet */}
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                  Nom Complet <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <User className="absolute left-2.5 top-2.5 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Hichem Gherbi"
+                    value={editName}
+                    onChange={(e) => {
+                      setEditName(e.target.value);
+                      setModalError('');
+                    }}
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#171b34]/15 focus:border-[#171b34]"
+                  />
+                </div>
+              </div>
+
+              {/* Numéro de Téléphone */}
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                  Numéro de Téléphone <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-2.5 top-2.5 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="tel"
+                    required
+                    placeholder="Ex: 0555 12 34 56"
+                    value={editPhone}
+                    onChange={(e) => {
+                      setEditPhone(e.target.value);
+                      setModalError('');
+                    }}
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:ring-2 focus:ring-[#171b34]/15 focus:border-[#171b34]"
+                  />
+                </div>
+              </div>
+
+              {/* Mot de Passe */}
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                  Mot de Passe de Connexion <span className="text-red-500">*</span>
                 </label>
                 <div className="relative flex items-center">
+                  <Lock className="absolute left-2.5 top-2.5 w-4 h-4 text-zinc-400" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
-                    placeholder="Entrez le nouveau mot de passe"
-                    value={newPassword}
+                    placeholder="Entrez le mot de passe"
+                    value={editPassword}
                     onChange={(e) => {
-                      setNewPassword(e.target.value);
+                      setEditPassword(e.target.value);
                       setModalError('');
                     }}
-                    className="w-full pl-3 pr-10 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-amber-550/60 font-mono"
+                    className="w-full pl-9 pr-10 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#171b34]/15 focus:border-[#171b34] font-mono"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-350 transition"
+                    className="absolute right-3 top-2.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-350 transition cursor-pointer"
                     title={showPassword ? "Masquer" : "Afficher"}
                   >
                     {showPassword ? (
@@ -841,27 +935,105 @@ function SettingsPane({
                     )}
                   </button>
                 </div>
-                {modalError && (
-                  <p className="text-[10px] text-red-500 font-bold mt-1">{modalError}</p>
-                )}
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center space-x-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedEmployeeForPassword(null)}
-                  className="w-1/2 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-750 text-xs font-bold transition"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="w-1/2 py-2 bg-[#f8ef1d] hover:bg-[#d8cf12] text-[#171b34] rounded-lg text-xs font-black transition"
-                >
-                  Enregistrer
-                </button>
+              {/* Poste Occupé & Statut */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                    Poste Occupé
+                  </label>
+                  <div className="relative">
+                    <Briefcase className="absolute left-2 top-2.5 w-3.5 h-3.5 text-zinc-400 pointer-events-none" />
+                    <select
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value)}
+                      className="w-full pl-7 pr-1 py-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#171b34]/15 focus:border-[#171b34] cursor-pointer"
+                    >
+                      <option value="Vendeur">Vendeur</option>
+                      <option value="Livreur">Livreur</option>
+                      <option value="Préparateur">Préparateur</option>
+                      <option value="Manager & Gestion">Manager & Gestion</option>
+                      {!['Vendeur', 'Livreur', 'Préparateur', 'Manager & Gestion'].includes(editRole) && (
+                        <option value={editRole}>{editRole}</option>
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                    Statut
+                  </label>
+                  <div className="relative">
+                    <ToggleLeft className="absolute left-2 top-2.5 w-3.5 h-3.5 text-zinc-400 pointer-events-none" />
+                    <select
+                      value={editStatus}
+                      onChange={(e) => setEditStatus(e.target.value as 'Actif' | 'Inactif')}
+                      className="w-full pl-7 pr-1 py-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#171b34]/15 focus:border-[#171b34] cursor-pointer"
+                    >
+                      <option value="Actif">🟢 Actif</option>
+                      <option value="Inactif">🔴 Inactif</option>
+                    </select>
+                  </div>
+                </div>
               </div>
+
+              {/* Delete Confirmation or Action Buttons */}
+              {confirmDeleteEmployee ? (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 space-y-2.5 animate-fadeIn">
+                  <p className="text-[11px] font-bold text-red-700 leading-snug">
+                    Voulez-vous vraiment supprimer l'employé <span className="underline">{selectedEmployee.name}</span> ? Toutes les informations des factures resteront enregistrées.
+                  </p>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteEmployee(false)}
+                      className="w-1/2 py-2 bg-white border border-zinc-200 text-zinc-700 rounded-lg hover:bg-zinc-50 text-xs font-bold transition cursor-pointer"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteSelectedEmployee}
+                      className="w-1/2 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-black transition cursor-pointer flex items-center justify-center space-x-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Confirmer</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedEmployee(null);
+                        setConfirmDeleteEmployee(false);
+                      }}
+                      className="w-1/2 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-750 text-xs font-bold transition cursor-pointer"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      className="w-1/2 py-2 bg-[#f8ef1d] hover:bg-[#d8cf12] text-[#171b34] rounded-lg text-xs font-black transition cursor-pointer"
+                    >
+                      Enregistrer
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteEmployee(true)}
+                    className="w-full py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Supprimer l'employé</span>
+                  </button>
+                </div>
+              )}
             </form>
           </div>
         </div>
@@ -1121,14 +1293,31 @@ export default function App() {
     localStorage.removeItem('prince_logged_username');
   };
 
-  const handleCreateEmployeeSubmit = (data: Omit<Employee, 'id' | 'createdAt'>) => {
+  const handleCreateEmployeeSubmit = async (data: Omit<Employee, 'id' | 'createdAt'>) => {
     const newEmp: Employee = {
       ...data,
       id: `emp-${Date.now()}`,
       createdAt: new Date().toISOString()
     };
     const updated = [newEmp, ...employees];
-    saveEmployees(updated);
+    setEmployees(updated);
+    localStorage.setItem('prince_ecom_employees', JSON.stringify(updated));
+    await saveEmployeeToFirestore(newEmp);
+  };
+
+  const handleUpdateEmployee = async (updatedEmployee: Employee) => {
+    const updated = employees.map(emp => emp.id === updatedEmployee.id ? updatedEmployee : emp);
+    setEmployees(updated);
+    localStorage.setItem('prince_ecom_employees', JSON.stringify(updated));
+    await saveEmployeeToFirestore(updatedEmployee);
+  };
+
+  // Delete employee ONLY; all invoice data remains saved and untouched
+  const handleDeleteEmployee = async (employeeId: string) => {
+    const updated = employees.filter(emp => emp.id !== employeeId);
+    setEmployees(updated);
+    localStorage.setItem('prince_ecom_employees', JSON.stringify(updated));
+    await deleteEmployeeFromFirestore(employeeId);
   };
 
   const handleClearAllData = async () => {
@@ -1441,6 +1630,8 @@ export default function App() {
             formatDZD={formatDZD}
             onClearAllData={handleClearAllData}
             saveEmployees={saveEmployees}
+            onUpdateEmployee={handleUpdateEmployee}
+            onDeleteEmployee={handleDeleteEmployee}
           />
         ) : (
           <>
