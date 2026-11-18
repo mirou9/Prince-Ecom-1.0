@@ -57,8 +57,7 @@ function InvoiceCard({ invoice, onStatusChange, onEditInvoice, currentRole, isPa
   return (
     <div 
       id={`invoice-${invoice.id}`}
-      className="card-content-auto bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-3.5 shadow-xs hover:shadow-xs hover:border-zinc-300 dark:hover:border-zinc-750 transition duration-150 flex flex-col space-y-2.5 relative"
-      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 160px' }}
+      className={`bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-3.5 shadow-xs hover:shadow-xs hover:border-zinc-300 dark:hover:border-zinc-750 transition duration-150 flex flex-col space-y-2.5 relative ${dropdownOpen ? 'z-50' : ''}`}
     >
       {/* Top Header Row */}
       <div className="flex items-center justify-between gap-2 border-b border-zinc-100 dark:border-zinc-805 pb-2">
@@ -85,7 +84,7 @@ function InvoiceCard({ invoice, onStatusChange, onEditInvoice, currentRole, isPa
         </div>
 
         {/* Custom Pinned Dropdown Status Button Selector */}
-        <div className="relative shrink-0 z-20 flex items-center gap-1.5">
+        <div className={`relative shrink-0 flex items-center gap-1.5 ${dropdownOpen ? 'z-50' : 'z-20'}`}>
           {/* Petit icône facture qui ouvre la photo si enregistrée */}
           {invoice.photoUrl && (
             <button
@@ -138,9 +137,9 @@ function InvoiceCard({ invoice, onStatusChange, onEditInvoice, currentRole, isPa
           {dropdownOpen && invoice.status !== 'Payé' && (
             <>
               {/* Overlay background to dismiss */}
-              <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
+              <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
               
-              <div className="absolute right-0 mt-1 w-44 rounded-lg bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-805 shadow-xl overflow-hidden z-20">
+              <div className="absolute top-full right-0 mt-1.5 w-44 rounded-lg bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-805 shadow-xl overflow-hidden z-50">
                 <div className="p-1 space-y-0.5">
                   <div className="text-[9px] uppercase tracking-wider font-semibold text-zinc-400 px-2 py-0.5">
                     Statut

@@ -36,7 +36,13 @@ import {
   Phone,
   ToggleLeft,
   Pencil,
-  X
+  X,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Upload,
+  FileJson,
+  FileSpreadsheet
 } from 'lucide-react';
 
 import { Invoice, OrderStatus, UserRole, Employee } from './types';
@@ -61,9 +67,16 @@ import {
   saveNotesToFirestoreBatch,
   syncLivreurs,
   saveLivreurToFirestore,
+  deleteLivreurFromFirestore,
   clearAllFirestoreData,
   NoteItem
 } from './lib/firebase';
+import {
+  exportAppBackupJSON,
+  exportInvoicesCSV,
+  parseBackupFile,
+  AppBackupData
+} from './lib/backup';
 
 
 // ----------------------------------------------------
@@ -72,6 +85,7 @@ import {
 interface SettingsPaneProps {
   employees: Employee[];
   invoices: Invoice[];
+  livreurs: string[];
   setIsCreateEmployeeOpen: (open: boolean) => void;
   activeSettingsTab: 'Employé' | 'Statistique';
   setActiveSettingsTab: (tab: 'Employé' | 'Statistique') => void;
@@ -81,11 +95,13 @@ interface SettingsPaneProps {
   saveEmployees: (newEmployees: Employee[]) => void;
   onUpdateEmployee: (updatedEmployee: Employee) => Promise<void> | void;
   onDeleteEmployee: (employeeId: string) => Promise<void> | void;
+  onImportData: (data: AppBackupData, mode: 'merge' | 'replace') => Promise<void>;
 }
 
 function SettingsPane({
   employees,
   invoices,
+  livreurs,
   setIsCreateEmployeeOpen,
   activeSettingsTab,
   setActiveSettingsTab,
@@ -93,7 +109,8 @@ function SettingsPane({
   formatDZD,
   onClearAllData,
   onUpdateEmployee,
-  onDeleteEmployee
+  onDeleteEmployee,
+  onImportData
 }: SettingsPaneProps) {
   const [password, setPassword] = useState('');
   const [showPasswordInput, setShowPasswordInput] = useState(false);
@@ -117,11 +134,111 @@ function SettingsPane({
   const [statDurationFilter, setStatDurationFilter] = useState<string>('tous'); // 'tous', 'today', '7days', '30days', 'this_month', 'custom'
   const [statStartDate, setStatStartDate] = useState<string>('');
   const [statEndDate, setStatEndDate] = useState<string>('');
+  const [isStatFiltersExpanded, setIsStatFiltersExpanded] = useState<boolean>(true);
+
+  // Backup Export / Import state
+  const importInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ fileName: string; data: AppBackupData } | null>(null);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     const unsubscribe = syncNotes(setNotes);
     return () => unsubscribe();
   }, []);
+
+  const handleExportJSON = () => {
+    try {
+      const filename = exportAppBackupJSON({ invoices, employees, notes, livreurs });
+      setBackupFeedback({
+        type: 'success',
+        message: `Sauvegarde JSON exportée (${filename}) : ${invoices.length} facture(s), ${employees.length} employé(s), ${notes.length} note(s).`
+      });
+    } catch (err: any) {
+      setBackupFeedback({
+        type: 'error',
+        message: err?.message || 'Erreur lors de l\'exportation JSON.'
+      });
+    }
+  };
+
+  const handleExportCSV = () => {
+    try {
+      const filename = exportInvoicesCSV(invoices);
+      setBackupFeedback({
+        type: 'success',
+        message: `Export CSV réussi (${filename}) : ${invoices.length} facture(s) exportée(s).`
+      });
+    } catch (err: any) {
+      setBackupFeedback({
+        type: 'error',
+        message: err?.message || 'Erreur lors de l\'exportation CSV.'
+      });
+    }
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setBackupFeedback(null);
+    try {
+      const parsed = await parseBackupFile(file);
+      setPendingImport({ fileName: file.name, data: parsed });
+      setImportMode('merge');
+    } catch (err: any) {
+      setPendingImport(null);
+      setBackupFeedback({
+        type: 'error',
+        message: err?.message || 'Impossible de lire ce fichier.'
+      });
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!pendingImport) return;
+    setIsImporting(true);
+    setBackupFeedback(null);
+
+    try {
+      const imported = pendingImport.data;
+      await onImportData(imported, importMode);
+
+      // Update Notes collection as well
+      const shouldUpdateNotes = imported.notes.length > 0 || (importMode === 'replace' && imported.sourceType === 'json');
+      if (shouldUpdateNotes) {
+        let nextNotes: NoteItem[];
+        if (importMode === 'replace' && imported.sourceType === 'json') {
+          nextNotes = imported.notes;
+        } else {
+          const map = new Map<string, NoteItem>(notes.map((n) => [n.id, n]));
+          for (const note of imported.notes) {
+            map.set(note.id, note);
+          }
+          nextNotes = Array.from(map.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+        }
+        setNotes(nextNotes);
+        await saveNotesToFirestoreBatch(nextNotes, notes);
+      }
+
+      setBackupFeedback({
+        type: 'success',
+        message: `Importation réussie (${importMode === 'merge' ? 'Fusion' : 'Remplacement'}) : ${imported.invoices.length} facture(s), ${imported.employees.length} employé(s), ${imported.notes.length} note(s), ${imported.livreurs.length} livreur(s).`
+      });
+      setPendingImport(null);
+    } catch (err: any) {
+      setBackupFeedback({
+        type: 'error',
+        message: err?.message || 'Erreur lors de l\'importation des données.'
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   const handleAddNote = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -423,96 +540,120 @@ function SettingsPane({
           <div className="space-y-5 animate-fadeIn">
             
             {/* Filters Bar for Statistics */}
-            <div className="bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-xl shadow-2xs space-y-3">
-              <div className="flex items-center space-x-2 pb-2 border-b border-zinc-150 dark:border-zinc-800">
-                <SlidersHorizontal className="w-4 h-4 text-[#f8ef1d]" />
-                <h4 className="text-xs font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
-                  Filtres de recherche et de période
-                </h4>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {/* Filter 1: Nom d'employé */}
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest">
-                    Filtrer par collaborateur
-                  </label>
-                  <select
-                    value={statEmployeeFilter}
-                    onChange={(e) => setStatEmployeeFilter(e.target.value)}
-                    className="w-full bg-white dark:bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none font-medium cursor-pointer"
-                  >
-                    <option value="tous">Tous les intervenants</option>
-                    <option value="PrinceEcom">PrinceEcom (Employeur)</option>
-                    {employees.map(emp => (
-                      <option key={emp.id} value={emp.name}>{emp.name}</option>
-                    ))}
-                  </select>
+            <div className={`bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xs transition-all ${isStatFiltersExpanded ? 'p-4 space-y-3' : 'px-3 py-2'}`}>
+              <button
+                type="button"
+                onClick={() => setIsStatFiltersExpanded(prev => !prev)}
+                className={`w-full flex items-center justify-between gap-2 cursor-pointer text-left ${isStatFiltersExpanded ? 'pb-2 border-b border-zinc-150 dark:border-zinc-800' : ''}`}
+              >
+                <div className="flex items-center space-x-2 min-w-0">
+                  <SlidersHorizontal className="w-4 h-4 text-[#f8ef1d] shrink-0" />
+                  <h4 className="text-xs font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200 truncate">
+                    Filtres de recherche et de période
+                  </h4>
+                  {!isStatFiltersExpanded && (statEmployeeFilter !== 'tous' || statDurationFilter !== 'tous') && (
+                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 shrink-0">
+                      ({filteredInvoicesForStats.length})
+                    </span>
+                  )}
                 </div>
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                  <span>{isStatFiltersExpanded ? 'Réduire' : 'Agrandir'}</span>
+                  {isStatFiltersExpanded ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </span>
+              </button>
 
-                {/* Filter 2: Date ou Durée */}
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest">
-                    Période temporelle
-                  </label>
-                  <select
-                    value={statDurationFilter}
-                    onChange={(e) => setStatDurationFilter(e.target.value)}
-                    className="w-full bg-white dark:bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none font-medium cursor-pointer"
-                  >
-                    <option value="tous">Toutes les dates</option>
-                    <option value="today">Aujourd'hui</option>
-                    <option value="7days">7 derniers jours</option>
-                    <option value="30days">30 derniers jours</option>
-                    <option value="this_month">Ce mois-ci</option>
-                    <option value="custom">Période personnalisée 📅</option>
-                  </select>
-                </div>
+              {isStatFiltersExpanded && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {/* Filter 1: Nom d'employé */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                        Filtrer par collaborateur
+                      </label>
+                      <select
+                        value={statEmployeeFilter}
+                        onChange={(e) => setStatEmployeeFilter(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none font-medium cursor-pointer"
+                      >
+                        <option value="tous">Tous les intervenants</option>
+                        <option value="PrinceEcom">PrinceEcom (Employeur)</option>
+                        {employees.map(emp => (
+                          <option key={emp.id} value={emp.name}>{emp.name}</option>
+                        ))}
+                      </select>
+                    </div>
 
-                {/* Filter 3: Custom Date Range (Conditional) */}
-                {statDurationFilter === 'custom' && (
-                  <div className="space-y-1 grid grid-cols-2 gap-2 animate-fadeIn">
-                    <div>
-                      <label className="block text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest mb-1">
-                        Date début
+                    {/* Filter 2: Date ou Durée */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                        Période temporelle
                       </label>
-                      <input
-                        type="date"
-                        value={statStartDate}
-                        onChange={(e) => setStatStartDate(e.target.value)}
-                        className="w-full bg-white dark:bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none"
-                      />
+                      <select
+                        value={statDurationFilter}
+                        onChange={(e) => setStatDurationFilter(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none font-medium cursor-pointer"
+                      >
+                        <option value="tous">Toutes les dates</option>
+                        <option value="today">Aujourd'hui</option>
+                        <option value="7days">7 derniers jours</option>
+                        <option value="30days">30 derniers jours</option>
+                        <option value="this_month">Ce mois-ci</option>
+                        <option value="custom">Période personnalisée 📅</option>
+                      </select>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest mb-1">
-                        Date fin
-                      </label>
-                      <input
-                        type="date"
-                        value={statEndDate}
-                        onChange={(e) => setStatEndDate(e.target.value)}
-                        className="w-full bg-white dark:bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none"
-                      />
-                    </div>
+
+                    {/* Filter 3: Custom Date Range (Conditional) */}
+                    {statDurationFilter === 'custom' && (
+                      <div className="space-y-1 grid grid-cols-2 gap-2 animate-fadeIn">
+                        <div>
+                          <label className="block text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest mb-1">
+                            Date début
+                          </label>
+                          <input
+                            type="date"
+                            value={statStartDate}
+                            onChange={(e) => setStatStartDate(e.target.value)}
+                            className="w-full bg-white dark:bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest mb-1">
+                            Date fin
+                          </label>
+                          <input
+                            type="date"
+                            value={statEndDate}
+                            onChange={(e) => setStatEndDate(e.target.value)}
+                            className="w-full bg-white dark:bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              
-              {(statEmployeeFilter !== 'tous' || statDurationFilter !== 'tous') && (
-                <div className="pt-2 flex justify-between items-center text-[10px] text-amber-600 dark:text-amber-400 font-bold uppercase tracking-wider">
-                  <span>📌 Filtres actifs : {filteredInvoicesForStats.length} facture(s) correspondante(s)</span>
-                  <button
-                    onClick={() => {
-                      setStatEmployeeFilter('tous');
-                      setStatDurationFilter('tous');
-                      setStatStartDate('');
-                      setStatEndDate('');
-                    }}
-                    className="text-[10px] font-bold text-rose-500 hover:text-rose-600 underline cursor-pointer uppercase tracking-wider transition"
-                  >
-                    Réinitialiser les filtres
-                  </button>
-                </div>
+                  
+                  {(statEmployeeFilter !== 'tous' || statDurationFilter !== 'tous') && (
+                    <div className="pt-2 flex justify-between items-center text-[10px] text-amber-600 dark:text-amber-400 font-bold uppercase tracking-wider">
+                      <span>📌 Filtres actifs : {filteredInvoicesForStats.length} facture(s) correspondante(s)</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStatEmployeeFilter('tous');
+                          setStatDurationFilter('tous');
+                          setStatStartDate('');
+                          setStatEndDate('');
+                        }}
+                        className="text-[10px] font-bold text-rose-500 hover:text-rose-600 underline cursor-pointer uppercase tracking-wider transition"
+                      >
+                        Réinitialiser les filtres
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -734,6 +875,176 @@ function SettingsPane({
                 </>
               );
             })()}
+
+            {/* Sauvegarde & Restauration (Export / Import JSON & CSV) */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-zinc-100 dark:border-zinc-850">
+                <div className="flex items-center space-x-2">
+                  <Download className="w-4 h-4 text-[#f8ef1d]" />
+                  <h4 className="text-xs font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
+                    Sauvegarde & Restauration (Export / Import)
+                  </h4>
+                </div>
+                <span className="text-[10px] font-semibold text-zinc-400">
+                  {invoices.length} facture(s) • {employees.length} employé(s) • {notes.length} note(s)
+                </span>
+              </div>
+
+              {backupFeedback && (
+                <div
+                  className={`p-3 rounded-lg text-xs font-bold border ${
+                    backupFeedback.type === 'success'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50'
+                      : 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/50'
+                  }`}
+                >
+                  {backupFeedback.type === 'success' ? '✅ ' : '⚠️ '}
+                  {backupFeedback.message}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Export Block */}
+                <div className="p-3.5 bg-zinc-50 dark:bg-zinc-950/30 rounded-xl border border-zinc-100 dark:border-zinc-800 space-y-3">
+                  <div>
+                    <p className="text-[11px] font-black text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
+                      Exporter les données
+                    </p>
+                    <p className="text-[10px] text-zinc-500 mt-0.5">
+                      Téléchargez une sauvegarde externe complète (JSON) ou le tableau des factures (CSV).
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      id="btn-export-json"
+                      onClick={handleExportJSON}
+                      className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-[#171b34] hover:bg-[#171b34]/90 text-[#f8ef1d] rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                    >
+                      <FileJson className="w-3.5 h-3.5" />
+                      <span>Exporter JSON</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-export-csv"
+                      onClick={handleExportCSV}
+                      className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Exporter CSV</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Import Block */}
+                <div className="p-3.5 bg-zinc-50 dark:bg-zinc-950/30 rounded-xl border border-zinc-100 dark:border-zinc-800 space-y-3">
+                  <div>
+                    <p className="text-[11px] font-black text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
+                      Importer une sauvegarde
+                    </p>
+                    <p className="text-[10px] text-zinc-500 mt-0.5">
+                      Restaurez des factures et données déjà exportées (.json ou .csv).
+                    </p>
+                  </div>
+
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept=".json,.csv,application/json,text/csv"
+                    onChange={handleImportFileChange}
+                    className="hidden"
+                  />
+
+                  <button
+                    type="button"
+                    id="btn-import-backup"
+                    onClick={() => importInputRef.current?.click()}
+                    disabled={isImporting}
+                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white rounded-lg text-xs font-black transition cursor-pointer shadow-xs"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Choisir un fichier (.JSON / .CSV)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirmation preview box before importing */}
+              {pendingImport && (
+                <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 space-y-3 animate-fadeIn">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-black text-zinc-900 dark:text-zinc-100">
+                        Fichier prêt : <span className="font-mono text-amber-700 dark:text-amber-400">{pendingImport.fileName}</span>
+                      </p>
+                      <p className="text-[11px] text-zinc-600 dark:text-zinc-300 mt-0.5">
+                        Contenu détecté : <strong>{pendingImport.data.invoices.length}</strong> facture(s),{' '}
+                        <strong>{pendingImport.data.employees.length}</strong> employé(s),{' '}
+                        <strong>{pendingImport.data.notes.length}</strong> note(s),{' '}
+                        <strong>{pendingImport.data.livreurs.length}</strong> livreur(s).
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setImportMode('merge')}
+                      className={`p-2.5 rounded-lg border text-left transition cursor-pointer ${
+                        importMode === 'merge'
+                          ? 'bg-white dark:bg-zinc-900 border-amber-500 ring-1 ring-amber-500'
+                          : 'bg-white/60 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800'
+                      }`}
+                    >
+                      <p className="text-xs font-black text-zinc-900 dark:text-zinc-100">
+                        Fusionner (Recommandé)
+                      </p>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">
+                        Ajoute et met à jour sans supprimer les données existantes.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setImportMode('replace')}
+                      className={`p-2.5 rounded-lg border text-left transition cursor-pointer ${
+                        importMode === 'replace'
+                          ? 'bg-white dark:bg-zinc-900 border-rose-500 ring-1 ring-rose-500'
+                          : 'bg-white/60 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800'
+                      }`}
+                    >
+                      <p className="text-xs font-black text-rose-600 dark:text-rose-400">
+                        Remplacer tout
+                      </p>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">
+                        {pendingImport.data.sourceType === 'csv'
+                          ? 'Remplace uniquement les factures actuelles par celles du CSV.'
+                          : 'Remplace les données actuelles par celles de cette sauvegarde.'}
+                      </p>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setPendingImport(null)}
+                      disabled={isImporting}
+                      className="px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg text-xs font-bold cursor-pointer hover:bg-zinc-50 transition"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-confirm-import"
+                      onClick={handleConfirmImport}
+                      disabled={isImporting}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-lg text-xs font-black cursor-pointer transition"
+                    >
+                      {isImporting ? 'Importation en cours...' : 'Confirmer l\'importation'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
           </div>
         );
@@ -1200,21 +1511,13 @@ export default function App() {
   const [showPage2SubMenu, setShowPage2SubMenu] = useState(false);
  
   // ----------------------------------------------------
-  // Filters State
+  // Filters State (Filtres de recherche et de période - Employeur)
   // ----------------------------------------------------
-  // Page 1 filter
-  const [p1SortOrder, setP1SortOrder] = useState<'desc' | 'asc'>('desc');
-  const [p1TreatedByFilter, setP1TreatedByFilter] = useState<string>('tous');
-  
-  // Page 2 filters
-  const [p2FilterType, setP2FilterType] = useState<'tous' | 'En livraison' | 'Livré'>('tous');
-  const [p2TreatedByFilter, setP2TreatedByFilter] = useState<string>('tous');
-  
-  // Page 3 filter (REQUIRED: choose and filter by employee/employer who treated the order)
-  const [p3TreatedByFilter, setP3TreatedByFilter] = useState<string>('tous');
-
-  // Page 4 filter (Historique)
-  const [p4TreatedByFilter, setP4TreatedByFilter] = useState<string>('tous');
+  const [mainEmployeeFilter, setMainEmployeeFilter] = useState<string>('tous');
+  const [mainDurationFilter, setMainDurationFilter] = useState<string>('tous'); // 'tous', 'today', '7days', '30days', 'this_month', 'custom'
+  const [mainStartDate, setMainStartDate] = useState<string>('');
+  const [mainEndDate, setMainEndDate] = useState<string>('');
+  const [isMainFiltersExpanded, setIsMainFiltersExpanded] = useState<boolean>(true);
 
   // Load / Save invoices, employees and livreurs via Firebase sync (all start empty)
   useEffect(() => {
@@ -1329,6 +1632,75 @@ export default function App() {
     localStorage.removeItem('prince_ecom_settings_notes');
     localStorage.removeItem('prince_ecom_livreurs');
     await clearAllFirestoreData();
+  };
+
+  const handleImportData = async (imported: AppBackupData, mode: 'merge' | 'replace') => {
+    // 1. Invoices
+    let nextInvoices: Invoice[];
+    if (mode === 'replace') {
+      nextInvoices = [...imported.invoices];
+    } else {
+      const invMap = new Map<string, Invoice>(invoices.map((inv) => [inv.id, inv]));
+      for (const inv of imported.invoices) {
+        invMap.set(inv.id, inv);
+      }
+      nextInvoices = Array.from(invMap.values());
+    }
+    nextInvoices.sort((a, b) => {
+      const timeA = new Date(a.createdAt || '').getTime() || 0;
+      const timeB = new Date(b.createdAt || '').getTime() || 0;
+      return timeB - timeA;
+    });
+    const oldInvoices = invoices;
+    setInvoices(nextInvoices);
+    localStorage.setItem('prince_ecom_invoices', JSON.stringify(nextInvoices));
+    await saveInvoicesToFirestoreBatch(nextInvoices, oldInvoices);
+
+    // 2. Employees (for JSON backups or if employees are provided)
+    const shouldUpdateEmployees =
+      imported.employees.length > 0 || (mode === 'replace' && imported.sourceType === 'json');
+    if (shouldUpdateEmployees) {
+      let nextEmployees: Employee[];
+      if (mode === 'replace' && imported.sourceType === 'json') {
+        nextEmployees = [...imported.employees];
+      } else {
+        const empMap = new Map<string, Employee>(employees.map((e) => [e.id, e]));
+        for (const emp of imported.employees) {
+          empMap.set(emp.id, emp);
+        }
+        nextEmployees = Array.from(empMap.values());
+      }
+      const oldEmployees = employees;
+      setEmployees(nextEmployees);
+      localStorage.setItem('prince_ecom_employees', JSON.stringify(nextEmployees));
+      await saveEmployeesToFirestoreBatch(nextEmployees, oldEmployees);
+    }
+
+    // 3. Livreurs (for JSON backups or if livreurs are provided)
+    const shouldUpdateLivreurs =
+      imported.livreurs.length > 0 || (mode === 'replace' && imported.sourceType === 'json');
+    if (shouldUpdateLivreurs) {
+      const oldLivreurs = livreurs;
+      const nextLivreurs =
+        mode === 'replace' && imported.sourceType === 'json'
+          ? Array.from(new Set(imported.livreurs))
+          : Array.from(new Set([...livreurs, ...imported.livreurs]));
+      setLivreurs(nextLivreurs);
+      localStorage.setItem('prince_ecom_livreurs', JSON.stringify(nextLivreurs));
+
+      for (const liv of nextLivreurs) {
+        if (!oldLivreurs.includes(liv)) {
+          await saveLivreurToFirestore(liv);
+        }
+      }
+      if (mode === 'replace' && imported.sourceType === 'json') {
+        for (const oldLiv of oldLivreurs) {
+          if (!nextLivreurs.includes(oldLiv)) {
+            await deleteLivreurFromFirestore(oldLiv);
+          }
+        }
+      }
+    }
   };
 
 
@@ -1451,70 +1823,118 @@ export default function App() {
   // ----------------------------------------------------
   // Filtered List computations
   // ----------------------------------------------------
-  const matchFilter = (inv: Invoice, filterVal: string): boolean => {
-    if (!filterVal || filterVal === 'tous') return true;
-    if (inv.treatedByName === filterVal) return true;
-    if (inv.treatedBy === filterVal) return true;
-    return false;
+  const matchMainFilters = (inv: Invoice): boolean => {
+    if (currentRole !== 'Employeur') return true;
+
+    // 1. Collaborator filter
+    if (mainEmployeeFilter !== 'tous') {
+      if (mainEmployeeFilter === 'PrinceEcom') {
+        if (inv.treatedBy !== 'Employeur' && inv.treatedByName !== 'PrinceEcom') {
+          return false;
+        }
+      } else {
+        if (inv.treatedByName !== mainEmployeeFilter) {
+          return false;
+        }
+      }
+    }
+
+    // 2. Date / Duration filter
+    if (mainDurationFilter !== 'tous') {
+      const invDate = new Date(inv.createdAt);
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      if (mainDurationFilter === 'today') {
+        if (invDate < todayStart) return false;
+      } else if (mainDurationFilter === '7days') {
+        const sevenDaysAgo = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (invDate < sevenDaysAgo) return false;
+      } else if (mainDurationFilter === '30days') {
+        const thirtyDaysAgo = new Date(todayStart.getTime() - 30 * 24 * 60 * 60 * 1000);
+        if (invDate < thirtyDaysAgo) return false;
+      } else if (mainDurationFilter === 'this_month') {
+        const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        if (invDate < firstOfMonth) return false;
+      } else if (mainDurationFilter === 'custom') {
+        if (mainStartDate) {
+          const start = new Date(`${mainStartDate}T00:00:00`);
+          if (invDate < start) return false;
+        }
+        if (mainEndDate) {
+          const end = new Date(`${mainEndDate}T23:59:59.999`);
+          if (invDate > end) return false;
+        }
+      }
+    }
+
+    return true;
   };
 
-  // First, fuzzy search the complete collection (memoized)
+  // First, filter by role visibility and always keep most recent invoice on top & oldest at the bottom
   const visibleInvoices = useMemo(() => {
-    return currentRole === 'Employé'
+    const base = currentRole === 'Employé'
       ? invoices.filter(inv => inv.treatedByName === currentUserName)
       : invoices;
+    return [...base].sort((a, b) => {
+      const timeA = new Date(a.createdAt || '').getTime() || 0;
+      const timeB = new Date(b.createdAt || '').getTime() || 0;
+      return timeB - timeA;
+    });
   }, [invoices, currentRole, currentUserName]);
 
   const searchedInvoices = useMemo(() => {
     return fuzzySearchInvoices(visibleInvoices, searchQuery);
   }, [visibleInvoices, searchQuery]);
 
-  // Invoices currently under En préparation
+  // Invoices currently under En préparation (recent first)
   const preparationList = useMemo(() => {
     return searchedInvoices.filter(inv => inv.status === 'En préparation');
   }, [searchedInvoices]);
   
-  // Sort Page 1 dynamically and apply employee filter
+  // Page 1 filtered list (most recent first, oldest at the bottom)
   const sortedPage1List = useMemo(() => {
-    return [...preparationList]
-      .filter(inv => matchFilter(inv, p1TreatedByFilter))
-      .sort((a, b) => {
-        const itemsTotalA = a.items.reduce((sum, i) => sum + i.price * i.qty, 0);
-        const totalA = Math.max(0, itemsTotalA - (a.discount || 0));
-        const itemsTotalB = b.items.reduce((sum, i) => sum + i.price * i.qty, 0);
-        const totalB = Math.max(0, itemsTotalB - (b.discount || 0));
-        return p1SortOrder === 'desc' ? totalB - totalA : totalA - totalB;
-      });
-  }, [preparationList, p1TreatedByFilter, p1SortOrder]);
+    return preparationList.filter(matchMainFilters);
+  }, [preparationList, currentRole, mainEmployeeFilter, mainDurationFilter, mainStartDate, mainEndDate]);
 
   // Invoices currently under En livraison
   const livraisonList = useMemo(() => {
     return searchedInvoices.filter(inv => inv.status === 'En livraison');
   }, [searchedInvoices]);
 
-  // Refine Page 2 list with submenu filters
+  // Page 2 filtered list
   const filteredPage2List = useMemo(() => {
-    return livraisonList.filter(inv => matchFilter(inv, p2TreatedByFilter));
-  }, [livraisonList, p2TreatedByFilter]);
+    return livraisonList.filter(matchMainFilters);
+  }, [livraisonList, currentRole, mainEmployeeFilter, mainDurationFilter, mainStartDate, mainEndDate]);
 
   // Invoices currently under Livré
   const livreList = useMemo(() => {
     return searchedInvoices.filter(inv => inv.status === 'Livré');
   }, [searchedInvoices]);
 
-  // Sort or filter Page 3 dynamically
+  // Page 3 filtered list
   const filteredPage3List = useMemo(() => {
-    return livreList.filter(inv => matchFilter(inv, p3TreatedByFilter));
-  }, [livreList, p3TreatedByFilter]);
+    return livreList.filter(matchMainFilters);
+  }, [livreList, currentRole, mainEmployeeFilter, mainDurationFilter, mainStartDate, mainEndDate]);
 
   // Invoices currently in Historique (Payé ou Annulé)
   const historiqueList = useMemo(() => {
     return searchedInvoices.filter(inv => inv.status === 'Payé' || inv.status === 'Annulé');
   }, [searchedInvoices]);
 
+  // Page 4 filtered list
   const filteredPage4List = useMemo(() => {
-    return historiqueList.filter(inv => matchFilter(inv, p4TreatedByFilter));
-  }, [historiqueList, p4TreatedByFilter]);
+    return historiqueList.filter(matchMainFilters);
+  }, [historiqueList, currentRole, mainEmployeeFilter, mainDurationFilter, mainStartDate, mainEndDate]);
+
+  const activeFilteredCount =
+    activeTab === 'En préparation'
+      ? sortedPage1List.length
+      : activeTab === 'En livraison'
+        ? filteredPage2List.length
+        : activeTab === 'Livré'
+          ? filteredPage3List.length
+          : filteredPage4List.length;
 
   // Current page counter badges (memoized)
   const badgePrep = useMemo(() => visibleInvoices.filter(inv => inv.status === 'En préparation').length, [visibleInvoices]);
@@ -1623,6 +2043,7 @@ export default function App() {
           <SettingsPane
             employees={employees}
             invoices={visibleInvoices}
+            livreurs={livreurs}
             setIsCreateEmployeeOpen={setIsCreateEmployeeOpen}
             activeSettingsTab={activeSettingsTab}
             setActiveSettingsTab={setActiveSettingsTab}
@@ -1632,6 +2053,7 @@ export default function App() {
             saveEmployees={saveEmployees}
             onUpdateEmployee={handleUpdateEmployee}
             onDeleteEmployee={handleDeleteEmployee}
+            onImportData={handleImportData}
           />
         ) : (
           <>
@@ -1658,125 +2080,124 @@ export default function App() {
             )}
           </div>
 
-          {/* Page Specific Basic Filters Row */}
+          {/* Filters Bar from Statistics (Affiché uniquement pour le compte Employeur) */}
           {currentRole === 'Employeur' && (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800/60">
-            <div className="flex items-center space-x-2 text-zinc-500 text-xs font-semibold uppercase tracking-wider">
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>Filtres de tri & filtrage :</span>
+            <div className={`bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xs transition-all ${isMainFiltersExpanded ? 'p-4 space-y-3' : 'px-3 py-2'}`}>
+              <button
+                type="button"
+                onClick={() => setIsMainFiltersExpanded(prev => !prev)}
+                className={`w-full flex items-center justify-between gap-2 cursor-pointer text-left ${isMainFiltersExpanded ? 'pb-2 border-b border-zinc-150 dark:border-zinc-800' : ''}`}
+              >
+                <div className="flex items-center space-x-2 min-w-0">
+                  <SlidersHorizontal className="w-4 h-4 text-[#f8ef1d] shrink-0" />
+                  <h4 className="text-xs font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200 truncate">
+                    Filtres de recherche et de période
+                  </h4>
+                  {!isMainFiltersExpanded && (mainEmployeeFilter !== 'tous' || mainDurationFilter !== 'tous') && (
+                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 shrink-0">
+                      ({activeFilteredCount})
+                    </span>
+                  )}
+                </div>
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                  <span>{isMainFiltersExpanded ? 'Réduire' : 'Agrandir'}</span>
+                  {isMainFiltersExpanded ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </span>
+              </button>
+
+              {isMainFiltersExpanded && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {/* Filter 1: Nom d'employé */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                        Filtrer par collaborateur
+                      </label>
+                      <select
+                        value={mainEmployeeFilter}
+                        onChange={(e) => setMainEmployeeFilter(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none font-medium cursor-pointer"
+                      >
+                        <option value="tous">Tous les intervenants</option>
+                        <option value="PrinceEcom">PrinceEcom (Employeur)</option>
+                        {employees.map(emp => (
+                          <option key={emp.id} value={emp.name}>{emp.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Filter 2: Date ou Durée */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                        Période temporelle
+                      </label>
+                      <select
+                        value={mainDurationFilter}
+                        onChange={(e) => setMainDurationFilter(e.target.value)}
+                        className="w-full bg-white dark:bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none font-medium cursor-pointer"
+                      >
+                        <option value="tous">Toutes les dates</option>
+                        <option value="today">Aujourd'hui</option>
+                        <option value="7days">7 derniers jours</option>
+                        <option value="30days">30 derniers jours</option>
+                        <option value="this_month">Ce mois-ci</option>
+                        <option value="custom">Période personnalisée 📅</option>
+                      </select>
+                    </div>
+
+                    {/* Filter 3: Custom Date Range (Conditional) */}
+                    {mainDurationFilter === 'custom' && (
+                      <div className="space-y-1 grid grid-cols-2 gap-2 animate-fadeIn">
+                        <div>
+                          <label className="block text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest mb-1">
+                            Date début
+                          </label>
+                          <input
+                            type="date"
+                            value={mainStartDate}
+                            onChange={(e) => setMainStartDate(e.target.value)}
+                            className="w-full bg-white dark:bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-zinc-550 dark:text-zinc-400 uppercase tracking-widest mb-1">
+                            Date fin
+                          </label>
+                          <input
+                            type="date"
+                            value={mainEndDate}
+                            onChange={(e) => setMainEndDate(e.target.value)}
+                            className="w-full bg-white dark:bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {(mainEmployeeFilter !== 'tous' || mainDurationFilter !== 'tous') && (
+                    <div className="pt-2 flex justify-between items-center text-[10px] text-amber-600 dark:text-amber-400 font-bold uppercase tracking-wider">
+                      <span>📌 Filtres actifs : {activeFilteredCount} facture(s) correspondante(s)</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMainEmployeeFilter('tous');
+                          setMainDurationFilter('tous');
+                          setMainStartDate('');
+                          setMainEndDate('');
+                        }}
+                        className="text-[10px] font-bold text-rose-500 hover:text-rose-600 underline cursor-pointer uppercase tracking-wider transition"
+                      >
+                        Réinitialiser les filtres
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
-
-            {/* Filter widget display changes depending on Active Tab */}
-            <div>
-              {activeTab === 'En préparation' && (
-                <div className="flex items-center space-x-2 text-xs">
-                  <span className="text-zinc-400 font-medium">Filtrer par employé :</span>
-                  <select
-                    value={p1TreatedByFilter}
-                    onChange={(e) => setP1TreatedByFilter(e.target.value)}
-                    className="bg-zinc-50 dark:bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 cursor-pointer focus:outline-none font-medium"
-                  >
-                    {currentRole === 'Employé' ? (
-                      <>
-                        <option value="tous">📌 Toutes les factures</option>
-                        {employees.map(emp => (
-                          <option key={emp.id} value={emp.name}>{emp.name}</option>
-                        ))}
-                        <option value="PrinceEcom">PrinceEcom (Employeur)</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="tous">Tous les intervenants</option>
-                        <option value="Employé">Employé uniquement</option>
-                        <option value="Employeur">Employeur uniquement</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-              )}
-
-              {activeTab === 'En livraison' && (
-                <div className="flex items-center space-x-2 text-xs">
-                  <span className="text-zinc-400 font-medium">Filtrer par employé :</span>
-                  <select
-                    value={p2TreatedByFilter}
-                    onChange={(e) => setP2TreatedByFilter(e.target.value)}
-                    className="bg-zinc-50 dark:bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 cursor-pointer focus:outline-none font-medium"
-                  >
-                    {currentRole === 'Employé' ? (
-                      <>
-                        <option value="tous">📌 Toutes les factures</option>
-                        {employees.map(emp => (
-                          <option key={emp.id} value={emp.name}>{emp.name}</option>
-                        ))}
-                        <option value="PrinceEcom">PrinceEcom (Employeur)</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="tous">Tous les intervenants</option>
-                        <option value="Employé">Employé uniquement</option>
-                        <option value="Employeur">Employeur uniquement</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-              )}
-
-              {activeTab === 'Livré' && (
-                <div className="flex items-center space-x-2 text-xs">
-                  <span className="text-zinc-400 font-medium">Filtrer par employé :</span>
-                  <select
-                    value={p3TreatedByFilter}
-                    onChange={(e) => setP3TreatedByFilter(e.target.value)}
-                    className="bg-zinc-50 dark:bg-zinc-955 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 font-medium text-zinc-700 dark:text-zinc-300 cursor-pointer focus:outline-none"
-                  >
-                    {currentRole === 'Employé' ? (
-                      <>
-                        <option value="tous">📌 Toutes les factures</option>
-                        {employees.map(emp => (
-                          <option key={emp.id} value={emp.name}>{emp.name}</option>
-                        ))}
-                        <option value="PrinceEcom">PrinceEcom (Employeur)</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="tous">Tous les intervenants</option>
-                        <option value="Employé">Employé uniquement</option>
-                        <option value="Employeur">Employeur uniquement</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-              )}
-
-              {activeTab === 'Historique' && (
-                <div className="flex items-center space-x-2 text-xs">
-                  <span className="text-zinc-400 font-medium">Filtrer par employé :</span>
-                  <select
-                    value={p4TreatedByFilter}
-                    onChange={(e) => setP4TreatedByFilter(e.target.value)}
-                    className="bg-zinc-50 dark:bg-zinc-955 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 font-medium text-zinc-700 dark:text-zinc-300 cursor-pointer focus:outline-none"
-                  >
-                    {currentRole === 'Employé' ? (
-                      <>
-                        <option value="tous">📌 Toutes les factures</option>
-                        {employees.map(emp => (
-                          <option key={emp.id} value={emp.name}>{emp.name}</option>
-                        ))}
-                        <option value="PrinceEcom">PrinceEcom (Employeur)</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="tous">Tous les intervenants</option>
-                        <option value="Employé">Employé uniquement</option>
-                        <option value="Employeur">Employeur uniquement</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-              )}
-            </div>
-          </div>
           )}
 
         </div>
@@ -1866,8 +2287,8 @@ export default function App() {
                 </span>
               </div>
               
-              {p3TreatedByFilter !== 'tous' && (
-                <p className="text-xs text-zinc-400">Traité par : <span className="font-bold">{p3TreatedByFilter}</span></p>
+              {currentRole === 'Employeur' && mainEmployeeFilter !== 'tous' && (
+                <p className="text-xs text-zinc-400">Traité par : <span className="font-bold">{mainEmployeeFilter}</span></p>
               )}
             </div>
 
@@ -1905,8 +2326,8 @@ export default function App() {
                 </span>
               </div>
               
-              {p4TreatedByFilter !== 'tous' && (
-                <p className="text-xs text-zinc-400">Traité par : <span className="font-bold">{p4TreatedByFilter}</span></p>
+              {currentRole === 'Employeur' && mainEmployeeFilter !== 'tous' && (
+                <p className="text-xs text-zinc-400">Traité par : <span className="font-bold">{mainEmployeeFilter}</span></p>
               )}
             </div>
 
@@ -1916,7 +2337,7 @@ export default function App() {
                 <div className="flex items-center space-x-2.5">
                   <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                   <div>
-                    <p className="text-xs text-zinc-500 font-semibold uppercase tracking-wider">Chiffre d'Affaires Réglé ({p4TreatedByFilter === 'tous' ? 'Général' : `Filtre ${p4TreatedByFilter}`})</p>
+                    <p className="text-xs text-zinc-500 font-semibold uppercase tracking-wider">Chiffre d'Affaires Réglé ({currentRole === 'Employeur' && mainEmployeeFilter !== 'tous' ? `Filtre ${mainEmployeeFilter}` : 'Général'})</p>
                     <p className="text-xs text-zinc-400">Calculé en Dinar Algérien (DZD/DA)</p>
                   </div>
                 </div>
